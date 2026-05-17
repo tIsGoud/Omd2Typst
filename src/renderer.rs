@@ -364,7 +364,9 @@ fn render_block(out: &mut String, block: &Block, level_offset: u8) {
         }
         Block::Callout { kind, title, body } => {
             let icon = callout_icon(kind);
-            out.push_str(&format!("#callout(\"{}\", \"{} {}\")[\n", kind, icon, title));
+            out.push_str(&format!("#callout({}, {})[\n",
+                typst_string_val(kind),
+                typst_string_val(&format!("{} {}", icon, title))));
             for b in body {
                 render_block(out, b, level_offset);
             }
@@ -483,16 +485,28 @@ fn render_inline(out: &mut String, inline: &Inline) {
         Inline::InlineMath(s)        => out.push_str(&format!("${}$", s)),
         Inline::DisplayMath(s)       => out.push_str(&format!("\n$ {} $\n", s)),
         Inline::Footnote(inner)      => { out.push_str("#footnote["); render_inlines(out, inner); out.push(']'); }
-        Inline::Code(c) => { out.push('`'); out.push_str(c); out.push('`'); }
+        Inline::Code(c) => {
+            let max_run = c.chars()
+                .fold((0usize, 0usize), |(max, cur), ch| {
+                    if ch == '`' { (max.max(cur + 1), cur + 1) } else { (max, 0) }
+                })
+                .0;
+            let ticks = "`".repeat(max_run + 1);
+            if c.starts_with('`') || c.ends_with('`') {
+                out.push_str(&format!("{} {} {}", ticks, c, ticks));
+            } else {
+                out.push_str(&format!("{}{}{}", ticks, c, ticks));
+            }
+        }
         Inline::Link { text, url } => {
-            out.push_str(&format!("#link(\"{}\")[", url));
+            out.push_str(&format!("#link({})[", typst_string_val(url)));
             render_inlines(out, text);
             out.push(']');
         }
         Inline::Image { src, alt, width } => {
             let img = match width {
-                Some(w) => format!("image(\"{}\", width: {}pt)", src, w),
-                None    => format!("image(\"{}\")", src),
+                Some(w) => format!("image({}, width: {}pt)", typst_string_val(src), w),
+                None    => format!("image({})", typst_string_val(src)),
             };
             out.push_str(&format!("#figure({}, caption: [{}])", img, escape_typst(alt)));
         }
@@ -508,6 +522,8 @@ fn escape_typst(s: &str) -> String {
         .replace('$', "\\$")
         .replace('*', "\\*")
         .replace('_', "\\_")
+        .replace('[', "\\[")
+        .replace(']', "\\]")
 }
 
 /// Recursively extract plain text from an inline sequence (used for title synthesis).

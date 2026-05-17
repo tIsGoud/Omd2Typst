@@ -2,6 +2,7 @@ use comrak::{Arena, Options, parse_document};
 use comrak::nodes::{AstNode, NodeValue, ListType, TableAlignment};
 use regex::Regex;
 use std::collections::HashMap;
+use std::sync::OnceLock;
 use crate::ast::*;
 
 type FootnoteMap = HashMap<String, Vec<Inline>>;
@@ -69,15 +70,29 @@ fn split_frontmatter<'a>(input: &'a str) -> (Vec<(String, FrontmatterValue)>, &'
     if !input.starts_with("---") {
         return (vec![], input);
     }
-    // Find closing ---
     let after_open = &input[3..];
-    if let Some(close) = after_open.find("\n---") {
+    if let Some(close) = find_frontmatter_close(after_open) {
         let yaml = &after_open[..close].trim_start_matches('\n');
         let rest = &after_open[close + 4..]; // skip \n---
-        let rest = rest.trim_start_matches('\n');
+        let rest = rest.trim_start_matches(|c| c == '\n' || c == '\r');
         return (parse_yaml_frontmatter(yaml), rest);
     }
     (vec![], input)
+}
+
+/// Finds the position of a closing `---` frontmatter delimiter.
+/// The `---` must appear after a newline and be followed by a newline, `\r`, or end-of-string.
+fn find_frontmatter_close(s: &str) -> Option<usize> {
+    let mut search_from = 0;
+    while let Some(rel) = s[search_from..].find("\n---") {
+        let abs = search_from + rel;
+        let after = abs + 4;
+        if after >= s.len() || s.as_bytes()[after] == b'\n' || s.as_bytes()[after] == b'\r' {
+            return Some(abs);
+        }
+        search_from = abs + 1;
+    }
+    None
 }
 
 /// Parses simple YAML key/value pairs into (key, FrontmatterValue) pairs.
@@ -110,7 +125,12 @@ fn parse_yaml_frontmatter(yaml: &str) -> Vec<(String, FrontmatterValue)> {
                 }
             }
             if !items.is_empty() {
-                result.push((key, FrontmatterValue::Raw(format!("({})", items.join(", ")))));
+                let raw = if items.len() == 1 {
+                    format!("({},)", items[0])
+                } else {
+                    format!("({})", items.join(", "))
+                };
+                result.push((key, FrontmatterValue::Raw(raw)));
             }
         } else {
             result.push((key, yaml_scalar_to_fm_value(rest)));
@@ -120,11 +140,21 @@ fn parse_yaml_frontmatter(yaml: &str) -> Vec<(String, FrontmatterValue)> {
 }
 
 fn sanitize_key(k: &str) -> String {
-    // Typst identifiers: letters, digits, - and _. Replace anything else.
-    k.trim()
+    const TYPST_KEYWORDS: &[&str] = &[
+        "let", "if", "else", "for", "while", "in", "not", "and", "or",
+        "none", "true", "false", "import", "include", "show", "set",
+    ];
+    let mut result: String = k.trim()
         .chars()
         .map(|c| if c.is_alphanumeric() || c == '-' || c == '_' { c } else { '-' })
-        .collect()
+        .collect();
+    if result.starts_with(|c: char| c.is_ascii_digit()) {
+        result.insert(0, '_');
+    }
+    if TYPST_KEYWORDS.contains(&result.as_str()) {
+        result.insert(0, '_');
+    }
+    result
 }
 
 fn yaml_scalar_to_fm_value(s: &str) -> FrontmatterValue {
@@ -135,7 +165,12 @@ fn yaml_scalar_to_fm_value(s: &str) -> FrontmatterValue {
             .split(',')
             .map(|i| typst_string(i.trim().trim_matches(|c: char| c == '"' || c == '\'')))
             .collect();
-        return FrontmatterValue::Raw(format!("({})", items.join(", ")));
+        let raw = if items.len() == 1 {
+            format!("({},)", items[0])
+        } else {
+            format!("({})", items.join(", "))
+        };
+        return FrontmatterValue::Raw(raw);
     }
     // Quoted string — strip the quotes before inline-parsing
     let text = if (s.starts_with('"') && s.ends_with('"'))
@@ -223,8 +258,10 @@ fn parse_block<'a>(node: &'a AstNode<'a>, footnotes: &FootnoteMap) -> Option<Blo
     }
 }
 
+static CALLOUT_RE: OnceLock<Regex> = OnceLock::new();
+
 fn try_parse_callout(blocks: &[Block]) -> Option<Block> {
-    let re = Regex::new(r"(?i)^\[!(\w+)\][+-]?(?:\s+(.+))?$").unwrap();
+    let re = CALLOUT_RE.get_or_init(|| Regex::new(r"(?i)^\[!(\w+)\][+-]?(?:\s+(.+))?$").unwrap());
 
     if let Some(Block::Paragraph(inlines)) = blocks.first() {
         if let Some(Inline::Text(first_text)) = inlines.first() {
@@ -417,13 +454,16 @@ pub fn collect_inline_text(inlines: &[Inline]) -> String {
 /// Convert Obsidian wikilink image syntax to standard Markdown.
 ///   ![[path|150]]  →  ![|150](path)
 ///   ![[path]]      →  ![](path)
+static OBSIDIAN_IMAGE_RE: OnceLock<Regex> = OnceLock::new();
+static FENCE_RE: OnceLock<Regex> = OnceLock::new();
+
 fn preprocess_obsidian_images(input: &str) -> String {
     // Matches:
     //   ![[path]]      → no width, no alt
     //   ![[path|150]]  → width only
     // Fenced code blocks (``` or ~~~) are passed through unchanged.
-    let re = Regex::new(r"!\[\[([^\]\|]+?)(?:\|(\d+))?\]\]").unwrap();
-    let fence = Regex::new(r"^(```|~~~)").unwrap();
+    let re = OBSIDIAN_IMAGE_RE.get_or_init(|| Regex::new(r"!\[\[([^\]\|]+?)(?:\|(\d+))?\]\]").unwrap());
+    let fence = FENCE_RE.get_or_init(|| Regex::new(r"^(```|~~~)").unwrap());
 
     let mut out = String::with_capacity(input.len());
     let mut in_fence = false;
@@ -458,15 +498,24 @@ fn preprocess_obsidian_images(input: &str) -> String {
 fn make_list_item(mut blocks: Vec<Block>) -> ListItem {
     let checkbox = if let Some(Block::Paragraph(inlines)) = blocks.first_mut() {
         if let Some(Inline::Text(text)) = inlines.first_mut() {
-            let b = text.as_bytes();
-            // Pattern: '[', any single byte, ']', space/tab
-            if b.len() >= 4 && b[0] == b'[' && b[2] == b']' && (b[3] == b' ' || b[3] == b'\t') {
-                let c = b[1] as char;
-                *text = text[4..].to_string();
-                if text.is_empty() {
-                    inlines.remove(0);
+            let mut chars = text.chars();
+            let first = chars.next();
+            let ch = chars.next();
+            let third = chars.next();
+            let fourth = chars.next();
+            if first == Some('[') && third == Some(']')
+                && (fourth == Some(' ') || fourth == Some('\t'))
+            {
+                if let Some(c) = ch {
+                    let skip = 1 + c.len_utf8() + 2; // '[' + c + '] '
+                    *text = text[skip..].to_string();
+                    if text.is_empty() {
+                        inlines.remove(0);
+                    }
+                    Some(c)
+                } else {
+                    None
                 }
-                Some(c)
             } else {
                 None
             }
@@ -479,10 +528,12 @@ fn make_list_item(mut blocks: Vec<Block>) -> ListItem {
     ListItem { checkbox, blocks }
 }
 
-/// Splits a raw text node on `==highlight==` and `~subscript~` markers,
-/// pushing the appropriate `Inline` variants into `out`.
+static MARKED_TEXT_RE: OnceLock<Regex> = OnceLock::new();
+
+/// Splits a raw text node on `==highlight==` markers, pushing `Inline::Highlight`
+/// variants into `out`. Subscript is handled via HTML `<sub>` tags in `parse_inlines`.
 fn parse_marked_text(text: &str, out: &mut Vec<Inline>) {
-    let re = Regex::new(r"==([^=\n]+)==").unwrap();
+    let re = MARKED_TEXT_RE.get_or_init(|| Regex::new(r"==([^=\n]+)==").unwrap());
     let mut last = 0;
     for cap in re.captures_iter(text) {
         let m = cap.get(0).unwrap();

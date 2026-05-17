@@ -59,8 +59,10 @@ fn main() -> Result<()> {
         return Ok(());
     }
 
-    let input_path = cli.input.as_deref().unwrap();
-    let requested_output = cli.output.as_deref().unwrap();
+    let input_path = cli.input.as_deref()
+        .ok_or_else(|| anyhow::anyhow!("input file is required"))?;
+    let requested_output = cli.output.as_deref()
+        .ok_or_else(|| anyhow::anyhow!("output file is required"))?;
 
     let format = cli.format.clone().unwrap_or_else(|| {
         if requested_output.ends_with(".pdf") { Format::Pdf } else { Format::Typst }
@@ -111,10 +113,12 @@ fn main() -> Result<()> {
             // Write to intermediate<timestamp>.typ in the same directory as the PDF.
             let intermediate = intermediate_typ_path(&output_path);
             fs::write(&intermediate, &typst_src)
-                .with_context(|| format!("Cannot write intermediate file: {}", intermediate))?;
+                .with_context(|| format!("Cannot write intermediate file: {}", intermediate.display()))?;
 
             let status = Command::new("typst")
-                .args(["compile", &intermediate, &output_path])
+                .args(["compile"])
+                .arg(&intermediate)
+                .arg(&output_path)
                 .status()
                 .context("Failed to run `typst compile` — is typst installed?")?;
 
@@ -135,13 +139,11 @@ fn main() -> Result<()> {
 
 /// Returns the path for the intermediate .typ file:
 /// same directory as `output`, filename = intermediate<YYYYMMDDHHmmss>.typ
-fn intermediate_typ_path(output: &str) -> String {
+fn intermediate_typ_path(output: &str) -> std::path::PathBuf {
     let dir = std::path::Path::new(output)
         .parent()
         .unwrap_or(std::path::Path::new("."));
     dir.join(format!("intermediate-{}.typ", current_timestamp()))
-        .to_string_lossy()
-        .into_owned()
 }
 
 /// Returns the current UTC time formatted as YYYYMMDDHHmmss.

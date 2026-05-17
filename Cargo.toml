@@ -2,6 +2,9 @@
 name = "omd2typst"
 version = "0.4.0"
 edition = "2021"
+description = "Convert Obsidian Markdown notes to Typst/PDF via an AST pipeline"
+license = "MIT"
+rust-version = "1.70"
 
 [dependencies]
 comrak = "0.28"
