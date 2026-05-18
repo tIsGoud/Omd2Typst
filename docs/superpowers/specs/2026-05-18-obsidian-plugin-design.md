@@ -7,14 +7,14 @@
 
 ## Overview
 
-An official Obsidian community plugin that brings omd2typst functionality directly into Obsidian. Users can export any note to Typst source (`.typ`) or PDF without leaving the editor and without installing any external tools. The plugin is fully self-contained via bundled WASM.
+An official Obsidian community plugin that brings omd2typst functionality directly into Obsidian. Users can export any note to Typst source (`.typ`) or PDF without leaving the editor. PDF compilation uses the user's installed `typst` binary, ensuring template compatibility with their own Typst version.
 
 ---
 
 ## Goals
 
 - Export Obsidian notes to `.typ` or PDF in one action
-- Zero external dependencies — WASM-bundled, works on first install
+- Requires `typst` CLI installed — ensures PDF output matches the user's own Typst version
 - Desktop only (macOS, Windows, Linux)
 - Publishable as an official Obsidian community plugin
 - Supports multiple named Typst templates with a configurable default
@@ -24,12 +24,9 @@ An official Obsidian community plugin that brings omd2typst functionality direct
 
 ## Architecture
 
-### Approach: Two WASM modules
+### Approach: omd2typst WASM + system typst CLI
 
-Two WASM modules, orchestrated by a TypeScript Obsidian plugin:
-
-1. **omd2typst.wasm** — compiled from the Rust codebase via `wasm-pack`. Handles Markdown → Typst source conversion.
-2. **typst_compiler.wasm** — from the `typst-ts` ecosystem. Handles Typst source → PDF bytes.
+One WASM module handles Markdown → Typst conversion; the system `typst` binary handles Typst → PDF. This keeps template compatibility in the user's hands — the plugin never bundles a Typst version that could diverge from their templates.
 
 ```
 User triggers export (active note via palette, or any .md file via right-click)
@@ -40,10 +37,16 @@ User triggers export (active note via palette, or any .md file via right-click)
        ▼
  omd2typst.wasm → Typst source (string, in memory)
        │
-       ├──► write .typ   (if .typ output selected)
+       ├──► write .typ                          (if .typ output selected)
        │
-       └──► typst_compiler.wasm → PDF bytes → write .pdf   (if PDF selected)
+       └──► write .typ (intermediate)           (if PDF selected)
+              │
+              └──► typst compile --root <vault> → PDF bytes → write .pdf → remove .typ
 ```
+
+The `--root <vault>` flag makes vault-relative `#import` paths in the generated Typst source resolve correctly regardless of where the output folder is.
+
+On plugin load, the plugin checks for the `typst` binary and shows a notice immediately if it is not found. It searches `PATH` first, then common fixed locations (`/opt/homebrew/bin/typst`, `~/.cargo/bin/typst`, etc.).
 
 ### Dependency model: git submodule
 
@@ -55,8 +58,8 @@ This plugin is one of four planned consumers of omd2typst-core:
 
 | Consumer | How it uses the core |
 |---|---|
-| CLI (zero-dependency) | Native binary with embedded Typst |
-| **Obsidian plugin** | **omd2typst WASM + typst WASM** |
+| CLI (zero-dependency) | Native binary with embedded Typst (spec 2) |
+| **Obsidian plugin** | **omd2typst WASM + system typst CLI** |
 | Web service | Native Axum server with embedded Typst |
 | CI/CD pipelines | CLI binary |
 
@@ -97,12 +100,11 @@ obsidian-omd2typst/
 │   ├── frontmatter.ts    — frontmatter parse, merge, and insert logic
 │   ├── template.ts       — template list management, language declaration parsing
 │   ├── output.ts         — output path resolution for all three output location modes
+│   ├── typst-cli.ts      — findTypstBinary, checkTypstInstalled, compileToPdfViaCli
 │   └── wasm/
-│       ├── omd2typst.ts  — TypeScript wrapper for omd2typst WASM
-│       └── typst.ts      — TypeScript wrapper for Typst WASM compiler
-├── wasm/
-│   ├── omd2typst_bg.wasm    — built from libs/omd2typst via wasm-pack
-│   └── typst_compiler.wasm  — from typst-ts npm package
+│       └── omd2typst.ts  — TypeScript wrapper for omd2typst WASM
+├── wasm-runtime/
+│   └── omd2typst_bg.wasm    — built from libs/omd2typst via wasm-pack
 ├── libs/
 │   └── omd2typst/           — git submodule (pinned commit)
 ├── scripts/
@@ -227,10 +229,11 @@ The templates list in settings shows declared languages next to each entry (or "
 
 | Situation | Behaviour |
 |---|---|
-| Template file not found | Warning notification with file path |
-| Language mismatch | Non-blocking warning; user chooses to proceed or cancel |
-| WASM parse/render error | Error notification with the message from Rust |
-| Typst compilation failure | Error notification with Typst error output; intermediate `.typ` preserved for inspection |
+| typst not installed | Notice on plugin load; PDF export throws with install instructions |
+| Template file not found | Error notification with file path; export aborted |
+| Language mismatch | Non-blocking warning notification; export still proceeds |
+| omd2typst WASM error | Error notification with the message from Rust |
+| Typst CLI compilation failure | Error notification with typst stderr; intermediate `.typ` preserved for inspection |
 | Output folder missing | Auto-created (fixed folder mode); error notification if vault write fails |
 | Frontmatter merge: key conflict | Existing key left untouched; skipped keys logged to developer console |
 
@@ -242,8 +245,8 @@ The templates list in settings shows declared languages next to each entry (or "
 
 ```bash
 git submodule update --init          # pull omd2typst Rust source
-./scripts/build-wasm.sh              # wasm-pack build → wasm/omd2typst_bg.wasm
-npm install                          # pulls typst-ts WASM via npm
+./scripts/build-wasm.sh              # wasm-pack build → wasm-runtime/omd2typst_bg.wasm
+npm install                          # dev dependencies only (no runtime npm deps)
 npm run build                        # esbuild bundles everything → main.js
 ```
 
@@ -277,7 +280,7 @@ On tag push: run full build sequence → commit `main.js` + `manifest.json` to r
 | `frontmatter.ts` | Unit (Jest) | Merge logic, inline vs. file template, all frontmatter keys |
 | `template.ts` | Unit (Jest) | Language declaration parsing, mismatch detection |
 | `output.ts` | Unit (Jest) | Path resolution for all three output location modes |
-| `exporter.ts` | Integration | Mock Obsidian vault API, run full export with fixture `.md`, assert `.typ` snapshot |
+| `exporter.ts` | Integration | Mock Obsidian vault API and `compileToPdfViaCli`; assert `.typ` write for Typst export and PDF bytes write + `.typ` removal for PDF export |
 
 Obsidian GUI layer (command registration, settings tab rendering) is covered by manual testing — Obsidian's test tooling does not support automated UI tests.
 
