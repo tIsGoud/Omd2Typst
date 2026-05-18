@@ -343,7 +343,7 @@ use wasm_bindgen::prelude::*;
 use omd2typst_core::{parse_markdown, render_typst, RenderOptions, BUILTIN_TEMPLATE};
 
 #[wasm_bindgen]
-pub fn render_to_typst(markdown: &str, template_src: Option<String>) -> String {
+pub fn render_to_typst(markdown: &str, template_path: Option<String>) -> String {
     todo!()
 }
 
@@ -386,9 +386,9 @@ use wasm_bindgen::prelude::*;
 use omd2typst_core::{parse_markdown, render_typst, RenderOptions, BUILTIN_TEMPLATE};
 
 #[wasm_bindgen]
-pub fn render_to_typst(markdown: &str, template_src: Option<String>) -> String {
+pub fn render_to_typst(markdown: &str, template_path: Option<String>) -> String {
     let doc = parse_markdown(markdown);
-    render_typst(&doc, template_src.as_deref(), &RenderOptions::default())
+    render_typst(&doc, template_path.as_deref(), &RenderOptions::default())
 }
 
 #[wasm_bindgen]

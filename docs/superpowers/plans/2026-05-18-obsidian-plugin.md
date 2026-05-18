@@ -2,11 +2,11 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Build `obsidian-omd2typst`, an official Obsidian community plugin that exports notes to Typst source or PDF using two bundled WASM modules — omd2typst (MD→Typst) and typst-ts (Typst→PDF).
+**Goal:** Build `obsidian-omd2typst`, an official Obsidian community plugin that exports notes to Typst source or PDF using one WASM module (omd2typst for MD→Typst) and the user's installed `typst` binary for PDF compilation.
 
-**Architecture:** The existing `omd2typst` Rust repo gains a `src/lib.rs` WASM entry point compiled via `wasm-pack`; a new `obsidian-omd2typst` TypeScript repo consumes it as a git submodule. The omd2typst WASM is inlined into `main.js` at build time; the larger Typst WASM (~20 MB) ships as a separate file in the plugin directory and is loaded at runtime via the Obsidian vault adapter.
+**Architecture:** The existing `omd2typst` Rust repo gains a `src/lib.rs` WASM entry point compiled via `wasm-pack`; a new `obsidian-omd2typst` TypeScript repo consumes it as a git submodule. The omd2typst WASM is loaded at runtime via fetch; PDF compilation shells out to the system `typst` CLI via Node.js `child_process` (available in Electron/Obsidian). No typst compiler is bundled in the plugin.
 
-**Tech Stack:** Rust + wasm-bindgen + wasm-pack; TypeScript + Obsidian API; esbuild + esbuild-plugin-wasm; `@myriaddreamin/typst-ts-web-compiler`; Jest + ts-jest.
+**Tech Stack:** Rust + wasm-bindgen + wasm-pack; TypeScript + Obsidian API; esbuild; Node.js `child_process` + `fs`; Jest + ts-jest.
 
 ---
 
@@ -26,7 +26,7 @@
 | `manifest.json` | Create | Obsidian plugin metadata |
 | `package.json` | Create | npm deps and build scripts |
 | `tsconfig.json` | Create | TypeScript compiler config |
-| `esbuild.config.mjs` | Create | Bundle src/ + inline omd2typst WASM → main.js; copy typst WASM |
+| `esbuild.config.mjs` | Create | Bundle src/ → main.js; copy omd2typst WASM to wasm-runtime/ |
 | `scripts/build-wasm.sh` | Create | Runs wasm-pack inside the submodule |
 | `.gitignore` | Create | Excludes node_modules, main.js, wasm build artifacts, .superpowers/ |
 | `libs/omd2typst/` | Submodule | Pinned to current omd2typst commit |
@@ -37,7 +37,7 @@
 | `src/frontmatter.ts` | Create | Parse, merge, and insert frontmatter blocks |
 | `src/output.ts` | Create | Resolve output file path for all three output-location modes |
 | `src/wasm/omd2typst.ts` | Create | Lazy-init wrapper around omd2typst WASM |
-| `src/wasm/typst.ts` | Create | Lazy-init wrapper around Typst WASM compiler |
+| `src/typst-cli.ts` | Create | findTypstBinary, checkTypstInstalled, compileToPdfViaCli |
 | `src/exporter.ts` | Create | Orchestrates the full MD → Typst → (PDF) pipeline |
 | `src/main.ts` | Create | Plugin entry point; registers commands, context menus, settings tab |
 | `tests/template.test.ts` | Create | Unit tests for template.ts |
@@ -195,15 +195,12 @@ git init
     "@types/node": "^20.0.0",
     "builtin-modules": "^3.3.0",
     "esbuild": "^0.21.0",
-    "esbuild-plugin-wasm": "^1.1.0",
     "jest": "^29.5.0",
     "obsidian": "latest",
     "ts-jest": "^29.5.0",
     "typescript": "^5.4.0"
   },
-  "dependencies": {
-    "@myriaddreamin/typst-ts-web-compiler": "^0.5.0"
-  }
+  "dependencies": {}
 }
 ```
 
@@ -246,19 +243,18 @@ module.exports = {
 
 ```javascript
 import esbuild from 'esbuild';
-import { wasmLoader } from 'esbuild-plugin-wasm';
 import builtins from 'builtin-modules';
 import { copyFile, mkdir } from 'fs/promises';
 import process from 'process';
 
 const prod = process.argv[2] === 'production';
 
-// Copy the large Typst WASM to the plugin root so it can be loaded at runtime.
-// The omd2typst WASM is small enough to inline via wasmLoader().
+// Copy the omd2typst WASM to wasm-runtime/ so it can be loaded at runtime
+// via fetch() (async instantiation avoids Chrome's 4 KB sync-compile limit).
 await mkdir('wasm-runtime', { recursive: true });
 await copyFile(
-  'node_modules/@myriaddreamin/typst-ts-web-compiler/pkg/typst_ts_web_compiler_bg.wasm',
-  'wasm-runtime/typst_compiler.wasm',
+  'src/wasm/omd2typst-pkg/omd2typst_wasm_bg.wasm',
+  'wasm-runtime/omd2typst_bg.wasm',
 );
 
 const OBSIDIAN_EXTERNALS = [
@@ -275,12 +271,11 @@ await esbuild.build({
   bundle: true,
   external: OBSIDIAN_EXTERNALS,
   format: 'cjs',
-  target: 'es2018',
+  target: 'es2022',
   sourcemap: prod ? false : 'inline',
   treeShaking: true,
   outfile: 'main.js',
   minify: prod,
-  plugins: [wasmLoader()],  // inlines omd2typst WASM as base64 in main.js
   logLevel: 'info',
 });
 ```
@@ -917,13 +912,13 @@ git commit -m "feat: add output path resolution for all three output modes"
 
 ---
 
-## Task 7: WASM wrappers
+## Task 7: WASM wrapper and typst CLI helper
 
 **Files:**
 - Create: `src/wasm/omd2typst.ts`
-- Create: `src/wasm/typst.ts`
+- Create: `src/typst-cli.ts`
 
-These files wrap the WASM modules with lazy initialisation. They are not unit-tested directly — they are covered by the exporter integration test in Task 8.
+The WASM wrapper handles MD→Typst with lazy init. The CLI helper shells out to the system `typst` binary for PDF compilation. Neither is unit-tested directly — both are covered by the exporter integration test in Task 8.
 
 - [ ] **Step 1: Build the omd2typst WASM**
 
@@ -935,24 +930,42 @@ npm run build:wasm
 ```
 
 Expected: `✓ omd2typst WASM written to src/wasm/omd2typst-pkg`
-The directory `src/wasm/omd2typst-pkg/` now contains `omd2typst_bg.wasm`, `omd2typst.js`, and `omd2typst.d.ts`.
+The directory `src/wasm/omd2typst-pkg/` now contains `omd2typst_wasm_bg.wasm`, the JS glue, and `.d.ts` bindings.
 
 - [ ] **Step 2: Create src/wasm/omd2typst.ts**
 
 ```typescript
-import init, { render_to_typst, get_builtin_template } from './omd2typst-pkg/omd2typst';
+import {
+  __wbg_set_wasm,
+  __wbindgen_init_externref_table,
+  render_to_typst,
+  get_builtin_template,
+} from './omd2typst-pkg/omd2typst_wasm_bg.js';
 
 let initialised = false;
+let wasmPath: string | null = null;
+
+export function setOmd2TypstWasmPath(resourcePath: string): void {
+  wasmPath = resourcePath;
+}
 
 async function ensureInit(): Promise<void> {
   if (initialised) return;
-  await init();
+  if (!wasmPath) throw new Error('omd2typst WASM path not configured.');
+  const response = await fetch(wasmPath);
+  const buffer = await response.arrayBuffer();
+  const { instance } = await WebAssembly.instantiate(buffer, {
+    './omd2typst_wasm_bg.js': { __wbindgen_init_externref_table },
+  });
+  __wbg_set_wasm(instance.exports);
+  (instance.exports.__wbindgen_start as CallableFunction)();
   initialised = true;
 }
 
 /**
  * Convert Markdown to a Typst source string.
- * Pass the full content of a .typ template as templateSrc, or null for the built-in.
+ * templateSrc — vault-relative import path (e.g. "/typst/template.typ"), or null for built-in.
+ * The renderer emits `#import "<path>": template, callout` in the output.
  */
 export async function renderToTypst(
   markdown: string,
@@ -962,62 +975,77 @@ export async function renderToTypst(
   return render_to_typst(markdown, templateSrc ?? undefined);
 }
 
-/** Return the built-in Typst template source. */
 export async function getBuiltinTemplate(): Promise<string> {
   await ensureInit();
   return get_builtin_template();
 }
 ```
 
-- [ ] **Step 3: Inspect the typst-ts package to confirm the compiler API**
-
-```bash
-cat node_modules/@myriaddreamin/typst-ts-web-compiler/pkg/typst_ts_web_compiler.d.ts | head -80
-```
-
-Read the output to confirm the initialisation and compilation method signatures. The next step uses the documented API; adjust method names if the installed version differs.
-
-- [ ] **Step 4: Create src/wasm/typst.ts**
+- [ ] **Step 3: Create src/typst-cli.ts**
 
 ```typescript
-import { createTypstCompiler } from '@myriaddreamin/typst-ts-web-compiler';
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+const nodeFs   = typeof require !== 'undefined' ? require('fs')   as typeof import('fs')   : null;
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+const nodePath = typeof require !== 'undefined' ? require('path') as typeof import('path') : null;
 
-let compiler: Awaited<ReturnType<typeof createTypstCompiler>> | null = null;
-let wasmUrl: string | null = null;
+export function findTypstBinary(): string | null {
+  if (!nodeFs) return null;
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  const cp = require('child_process') as typeof import('child_process');
+  try { cp.execSync('typst --version', { stdio: 'pipe' }); return 'typst'; } catch { /* fall through */ }
+  const candidates = [
+    '/opt/homebrew/bin/typst',
+    '/usr/local/bin/typst',
+    '/usr/bin/typst',
+    process.env.HOME ? `${process.env.HOME}/.cargo/bin/typst` : '',
+  ];
+  for (const p of candidates) {
+    if (p && nodeFs.existsSync(p)) return p;
+  }
+  return null;
+}
+
+export function checkTypstInstalled(): string {
+  if (!nodeFs) throw new Error('Not running in Electron/Node environment');
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  const cp = require('child_process') as typeof import('child_process');
+  const bin = findTypstBinary();
+  if (!bin) throw new Error('typst not found. Install from https://typst.app or add to PATH.');
+  return cp.execSync(`"${bin}" --version`, { stdio: 'pipe' }).toString().trim();
+}
 
 /**
- * Must be called once on plugin load before any PDF compilation.
- * pluginDir — the vault-relative path to the plugin folder
- *   e.g. (plugin as any).manifest.dir  →  '.obsidian/plugins/omd2typst'
- * getResourcePath — app.vault.adapter.getResourcePath
+ * Compile a .typ file on disk to PDF using the system typst CLI.
+ * typPath   — vault-relative path to the .typ file
+ * vaultBase — absolute vault root (app.vault.adapter as any).basePath
+ * The --root flag makes vault-relative #import paths in the .typ resolve correctly.
  */
-export function setTypstWasmPath(resourcePath: string): void {
-  wasmUrl = resourcePath;
-}
-
-async function ensureCompiler(): Promise<typeof compiler> {
-  if (compiler) return compiler;
-  if (!wasmUrl) throw new Error('Typst WASM path not configured. Call setTypstWasmPath() first.');
-  compiler = createTypstCompiler();
-  await compiler.init({ getModule: () => fetch(wasmUrl!) });
-  return compiler;
-}
-
-/** Compile a Typst source string to PDF bytes. */
-export async function compileToPdf(typstSrc: string): Promise<Uint8Array> {
-  const c = await ensureCompiler();
-  c!.addSource('/main.typ', typstSrc);
-  const pdf = await c!.pdf({ mainFilePath: '/main.typ' });
-  if (!pdf) throw new Error('Typst compilation returned no output.');
-  return pdf;
+export async function compileToPdfViaCli(typPath: string, vaultBase: string): Promise<Uint8Array> {
+  if (!nodeFs || !nodePath) throw new Error('CLI requires Electron/Node environment');
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  const cp = require('child_process') as typeof import('child_process');
+  const bin = findTypstBinary();
+  if (!bin) throw new Error('typst CLI not found. Install from https://typst.app or add to PATH.');
+  const realTypPath = nodePath.join(vaultBase, typPath);
+  const realPdfPath = realTypPath.replace(/\.typ$/, '.__tmp.pdf');
+  const cmd = [`"${bin}"`, 'compile', `"${realTypPath}"`, `"${realPdfPath}"`, `--root "${vaultBase}"`].join(' ');
+  console.log('[omd2typst] CLI compile:', cmd);
+  try {
+    cp.execSync(cmd, { timeout: 120_000, stdio: 'pipe' });
+    const buf = nodeFs.readFileSync(realPdfPath) as Buffer;
+    return new Uint8Array(buf.buffer, buf.byteOffset, buf.byteLength);
+  } finally {
+    try { nodeFs.unlinkSync(realPdfPath); } catch { /* best-effort */ }
+  }
 }
 ```
 
-- [ ] **Step 5: Commit**
+- [ ] **Step 4: Commit**
 
 ```bash
-git add src/wasm/
-git commit -m "feat: add lazy-init WASM wrappers for omd2typst and typst compiler"
+git add src/wasm/omd2typst.ts src/typst-cli.ts
+git commit -m "feat: add omd2typst WASM wrapper and typst CLI helper"
 ```
 
 ---
@@ -1034,78 +1062,79 @@ Create `tests/exporter.test.ts`:
 
 ```typescript
 import { exportNote } from '../src/exporter';
-import { TFile, Notice } from 'obsidian';
-import type { Omd2TypstSettings } from '../src/settings';
+import type { TFile } from 'obsidian';
+const { TFile: TFileCtor } = require('obsidian') as { TFile: new (path: string) => TFile };
+import type { Omd2TypstSettings, TemplateEntry } from '../src/settings';
 
-// Mock the WASM wrappers
 jest.mock('../src/wasm/omd2typst', () => ({
   renderToTypst: jest.fn().mockResolvedValue('#heading[Hello]'),
 }));
-jest.mock('../src/wasm/typst', () => ({
-  compileToPdf: jest.fn().mockResolvedValue(new Uint8Array([0x25, 0x50, 0x44, 0x46])),
+jest.mock('../src/typst-cli', () => ({
+  compileToPdfViaCli: jest.fn().mockResolvedValue(new Uint8Array([0x25, 0x50, 0x44, 0x46])),
 }));
 
-const SETTINGS: Omd2TypstSettings = {
+const BASE_SETTINGS: Omd2TypstSettings = {
   templates: [], defaultTemplate: 'built-in',
-  defaultOutputFormat: 'pdf', outputMode: 'same-folder', outputFolder: 'exports',
+  defaultOutputFormat: 'typ', outputMode: 'fixed-folder', outputFolder: 'exports',
   defaultLanguage: 'en', frontmatterTemplateMode: 'inline',
   frontmatterInline: '', frontmatterFilePath: '',
 };
 
-function makeApp(noteContent: string) {
-  const writtenFiles: Record<string, string | Uint8Array> = {};
+function makeTFile(path: string): TFile {
+  const parts = path.split('/');
+  const name = parts[parts.length - 1];
+  const extension = name.includes('.') ? name.split('.').pop()! : '';
+  const basename = name.replace(/\.[^.]+$/, '');
+  const parent = parts.length > 1 ? { path: parts.slice(0, -1).join('/') } : null;
+  return { path, name, extension, basename, parent } as unknown as TFile;
+}
+
+function makeApp() {
   return {
     vault: {
-      read: jest.fn().mockResolvedValue(noteContent),
-      create: jest.fn().mockImplementation(async (path: string, data: any) => {
-        writtenFiles[path] = data;
-      }),
-      createBinary: jest.fn().mockImplementation(async (path: string, data: Uint8Array) => {
-        writtenFiles[path] = data;
-      }),
+      read: jest.fn().mockResolvedValue('# Hello\n'),
       getAbstractFileByPath: jest.fn().mockReturnValue(null),
-      createFolder: jest.fn().mockResolvedValue(undefined),
       adapter: {
-        getResourcePath: jest.fn().mockReturnValue('http://localhost/typst.wasm'),
+        write: jest.fn().mockResolvedValue(undefined),
+        remove: jest.fn().mockResolvedValue(undefined),
       },
     },
-    _written: writtenFiles,
   };
 }
 
-describe('exportNote', () => {
+describe('exportNote — Typst export', () => {
   it('writes a .typ file when format is typ', async () => {
-    const app = makeApp('# Hello') as any;
-    const file = new TFile('notes/hello.md');
-    await exportNote(file, 'typ', null, SETTINGS, app);
-    expect(app._written['notes/hello.typ']).toBe('#heading[Hello]');
+    const file = makeTFile('notes/hello.md');
+    const app = makeApp();
+    await exportNote(file, 'typ', null, BASE_SETTINGS, app as any);
+    expect(app.vault.adapter.write).toHaveBeenCalledWith('exports/hello.typ', '#heading[Hello]');
   });
+});
 
-  it('writes a .pdf file when format is pdf', async () => {
-    const app = makeApp('# Hello') as any;
-    const file = new TFile('notes/hello.md');
-    await exportNote(file, 'pdf', null, SETTINGS, app);
-    const pdf = app._written['notes/hello.pdf'] as Uint8Array;
-    expect(pdf[0]).toBe(0x25); // %PDF magic bytes
+describe('exportNote — PDF export', () => {
+  it('writes .typ then .pdf and removes the intermediate .typ', async () => {
+    const file = makeTFile('notes/hello.md');
+    const app = makeApp();
+    await exportNote(file, 'pdf', null, BASE_SETTINGS, app as any);
+    const calls = (app.vault.adapter.write as jest.Mock).mock.calls;
+    expect(calls[0][0]).toBe('exports/hello.typ');  // intermediate
+    expect(calls[1][0]).toBe('exports/hello.pdf');  // final PDF
+    expect(app.vault.adapter.remove).toHaveBeenCalledWith('exports/hello.typ');
   });
+});
 
-  it('warns when template language does not match note language', async () => {
-    const template = { name: 'DUO', path: 'tmpl.typ', languages: ['nl'] };
-    const settings = { ...SETTINGS, templates: [template], defaultTemplate: 'DUO' };
-    const app = makeApp('---\nlanguage: fr\n---\n# Hello') as any;
-    const mockTemplateFile = { path: 'tmpl.typ' };
-    app.vault.getAbstractFileByPath = jest.fn().mockImplementation((p: string) => {
-      return p === 'tmpl.typ' ? mockTemplateFile : null;
-    });
-    app.vault.read = jest.fn().mockImplementation(async (f: any) => {
-      if (f?.path === 'tmpl.typ') return '// omd2typst-languages: nl';
-      return '---\nlanguage: fr\n---\n# Hello';
-    });
-    const noticeMock = jest.mocked(Notice);
-    noticeMock.mockClear();
-    const file = new TFile('notes/hello.md');
-    await exportNote(file, 'typ', template, settings, app);
-    expect(noticeMock).toHaveBeenCalledWith(expect.stringContaining('DUO'));
+describe('exportNote — language mismatch', () => {
+  it('emits a Notice on mismatch but still exports', async () => {
+    const template: TemplateEntry = { name: 'DUO', path: 'templates/duo.typ', languages: ['nl'] };
+    const templateFile = new TFileCtor('templates/duo.typ');
+    const app = makeApp();
+    (app.vault.read as jest.Mock).mockResolvedValueOnce('---\nlanguage: en\n---\n# Hello\n');
+    (app.vault.getAbstractFileByPath as jest.Mock).mockReturnValue(templateFile);
+    const noticeMock = jest.spyOn(require('obsidian'), 'Notice');
+    await exportNote(file, 'typ', template, BASE_SETTINGS, app as any);
+    expect(noticeMock).toHaveBeenCalled();
+    expect(app.vault.adapter.write).toHaveBeenCalled();
+    noticeMock.mockRestore();
   });
 });
 ```
@@ -1121,19 +1150,26 @@ Expected: FAIL — `Cannot find module '../src/exporter'`
 - [ ] **Step 3: Create src/exporter.ts**
 
 ```typescript
-import { TFile, Notice } from 'obsidian';
-import type { App } from 'obsidian';
-import { renderToTypst } from './wasm/omd2typst';
-import { compileToPdf } from './wasm/typst';
-import { resolveOutputPath } from './output';
-import { parseFrontmatter } from './frontmatter';
+import { Notice, TFile, App } from 'obsidian';
+import type { OutputFormat, TemplateEntry, Omd2TypstSettings } from './settings';
 import { checkLanguageCompatibility } from './template';
-import type { OutputFormat, Omd2TypstSettings, TemplateEntry } from './settings';
+import { resolveOutputPath } from './output';
+import { renderToTypst } from './wasm/omd2typst';
+import { compileToPdfViaCli } from './typst-cli';
 
-/**
- * Run the full export pipeline for a single note file.
- * template — the TemplateEntry to use, or null for the built-in template.
- */
+function extractFrontmatterValue(content: string, key: string): string | null {
+  if (!content.startsWith('---')) return null;
+  const afterOpen = content.slice(3);
+  const closeIdx = afterOpen.indexOf('\n---');
+  if (closeIdx === -1) return null;
+  for (const line of afterOpen.slice(0, closeIdx).split('\n')) {
+    const colonIdx = line.indexOf(':');
+    if (colonIdx === -1) continue;
+    if (line.slice(0, colonIdx).trim() === key) return line.slice(colonIdx + 1).trim() || null;
+  }
+  return null;
+}
+
 export async function exportNote(
   file: TFile,
   format: OutputFormat,
@@ -1141,95 +1177,43 @@ export async function exportNote(
   settings: Omd2TypstSettings,
   app: App,
 ): Promise<void> {
-  const noteContent = await app.vault.read(file);
+  const markdown = await app.vault.read(file);
 
-  // Resolve language for validation
-  const fm = parseFrontmatter(noteContent);
-  const noteLanguage = extractLanguage(noteContent, fm, settings.defaultLanguage);
+  // Resolve template path for #import (null → built-in).
+  // Prefix with / → vault-root-relative; typst CLI resolves via --root <vaultBase>.
+  let templatePath: string | null = null;
+  if (template !== null && template.path) {
+    const abstractFile = app.vault.getAbstractFileByPath(template.path);
+    if (!(abstractFile instanceof TFile)) {
+      throw new Error(`Template file not found or is a folder: '${template.path}'`);
+    }
+    templatePath = '/' + template.path;
+  }
 
   // Language compatibility warning (non-blocking)
-  if (template) {
-    const templateContent = await readTemplateFile(template.path, app);
-    if (templateContent !== null) {
-      const warning = checkLanguageCompatibility(template, noteLanguage);
-      if (warning) new Notice(warning);
-    }
+  if (template !== null) {
+    const noteLanguage = extractFrontmatterValue(markdown, 'language') ?? settings.defaultLanguage;
+    const warning = checkLanguageCompatibility(template, noteLanguage);
+    if (warning !== null) new Notice(warning);
   }
 
-  // Load template source
-  const templateSrc = template ? await readTemplateFile(template.path, app) : null;
+  const typstSrc = await renderToTypst(markdown, templatePath);
 
-  // MD → Typst
-  const typstSrc = await renderToTypst(noteContent, templateSrc);
-
-  // Resolve output path
-  const outPath = resolveOutputPath(file.path, format, settings);
-  if (outPath === null) return; // 'ask' mode not yet triggered here — handled in main.ts
-
-  await ensureParentFolder(outPath, app);
+  const outputPath = resolveOutputPath(file.path, format, settings);
+  if (outputPath === null) throw new Error('ask-every-time output mode not yet implemented');
 
   if (format === 'typ') {
-    await writeText(outPath, typstSrc, app);
+    await app.vault.adapter.write(outputPath, typstSrc);
   } else {
-    let pdfBytes: Uint8Array;
-    try {
-      pdfBytes = await compileToPdf(typstSrc);
-    } catch (e) {
-      // Preserve the intermediate .typ so the user can inspect what Typst rejected.
-      const typFallback = outPath.replace(/\.pdf$/, '.typ');
-      await writeText(typFallback, typstSrc, app);
-      throw new Error(`Typst compilation failed (source saved to ${typFallback}): ${(e as Error).message}`);
-    }
-    await writeBinary(outPath, pdfBytes, app);
-  }
-}
-
-function extractLanguage(
-  content: string,
-  fm: { keys: string[] } | null,
-  defaultLang: string,
-): string {
-  if (!fm) return defaultLang;
-  const line = content.split('\n').find(l => l.trimStart().startsWith('language:'));
-  if (!line) return defaultLang;
-  return line.split(':')[1]?.trim() || defaultLang;
-}
-
-async function readTemplateFile(path: string, app: App): Promise<string | null> {
-  try {
-    const f = app.vault.getAbstractFileByPath(path);
-    if (!f) return null;
-    // Duck-typed read: works with both the real Obsidian TFile and test mocks.
-    return await app.vault.read(f as TFile);
-  } catch {
-    return null;
-  }
-}
-
-async function ensureParentFolder(filePath: string, app: App): Promise<void> {
-  const parts = filePath.split('/');
-  if (parts.length <= 1) return;
-  const folder = parts.slice(0, -1).join('/');
-  if (!app.vault.getAbstractFileByPath(folder)) {
-    await app.vault.createFolder(folder);
-  }
-}
-
-async function writeText(path: string, content: string, app: App): Promise<void> {
-  const existing = app.vault.getAbstractFileByPath(path);
-  if (existing && existing instanceof TFile) {
-    await app.vault.modify(existing, content);
-  } else {
-    await app.vault.create(path, content);
-  }
-}
-
-async function writeBinary(path: string, data: Uint8Array, app: App): Promise<void> {
-  const existing = app.vault.getAbstractFileByPath(path);
-  if (existing && existing instanceof TFile) {
-    await app.vault.modifyBinary(existing, data.buffer);
-  } else {
-    await app.vault.createBinary(path, data);
+    // Write intermediate .typ so typst CLI can compile it with --root <vaultBase>.
+    const typPath = outputPath.replace(/\.pdf$/, '.typ');
+    await app.vault.adapter.write(typPath, typstSrc);
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const vaultBase: string = (app.vault.adapter as any).basePath ?? '';
+    const pdfBytes = await compileToPdfViaCli(typPath, vaultBase);
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    await (app.vault.adapter.write as any)(outputPath, pdfBytes);
+    await app.vault.adapter.remove(typPath);
   }
 }
 ```
@@ -1254,7 +1238,7 @@ Expected: All tests pass.
 
 ```bash
 git add src/exporter.ts tests/exporter.test.ts
-git commit -m "feat: add exporter pipeline (MD → Typst → PDF)"
+git commit -m "feat: add exporter pipeline (MD → Typst → PDF via system typst CLI)"
 ```
 
 ---
@@ -1268,30 +1252,36 @@ git commit -m "feat: add exporter pipeline (MD → Typst → PDF)"
 
 ```typescript
 import { Plugin, TFile, Notice, normalizePath } from 'obsidian';
-import { Omd2TypstSettings, DEFAULT_SETTINGS, TemplateEntry } from './settings';
-import { Omd2TypstSettingTab } from './settings';
-import { exportNote } from './exporter';
+import { Omd2TypstSettings, DEFAULT_SETTINGS, OutputFormat, Omd2TypstSettingTab } from './settings';
 import { resolveDefaultTemplate } from './template';
-import { mergeFrontmatter, buildFrontmatterBlock } from './frontmatter';
-import { getBuiltinTemplate } from './wasm/omd2typst';
-import { setTypstWasmPath } from './wasm/typst';
+import { mergeFrontmatter } from './frontmatter';
+import { exportNote } from './exporter';
+import { checkTypstInstalled } from './typst-cli';
+import { setOmd2TypstWasmPath, getBuiltinTemplate } from './wasm/omd2typst';
 
 export default class Omd2TypstPlugin extends Plugin {
-  settings!: Omd2TypstSettings;
+  settings: Omd2TypstSettings = DEFAULT_SETTINGS;
 
-  async onload(): Promise<void> {
+  async onload() {
     await this.loadSettings();
-    this.addSettingTab(new Omd2TypstSettingTab(this.app, this));
 
-    // Configure the Typst WASM path for runtime loading
-    const pluginDir = (this as any).manifest.dir as string;
-    const wasmPath = this.app.vault.adapter.getResourcePath(
-      normalizePath(`${pluginDir}/wasm-runtime/typst_compiler.wasm`)
+    // Verify typst CLI is installed — required for PDF export.
+    try {
+      const version = checkTypstInstalled();
+      console.log(`[omd2typst] Found ${version}`);
+    } catch {
+      new Notice('omd2typst: typst not found — PDF export will fail. Install typst from https://typst.app or add it to PATH.');
+    }
+
+    // Configure the omd2typst WASM path for runtime loading.
+    const omd2typstWasmPath = (this.app.vault.adapter as any).getResourcePath(
+      normalizePath(`${this.manifest.dir}/wasm-runtime/omd2typst_bg.wasm`)
     );
-    setTypstWasmPath(wasmPath);
+    setOmd2TypstWasmPath(omd2typstWasmPath);
 
     this.registerCommands();
     this.registerContextMenus();
+    this.addSettingTab(new Omd2TypstSettingTab(this.app, this));
   }
 
   private registerCommands(): void {
@@ -1617,7 +1607,7 @@ Expected: All tests pass.
 npm run build
 ```
 
-Expected: `main.js` created in the repo root, no errors. The `wasm-runtime/` directory contains `typst_compiler.wasm`.
+Expected: `main.js` created in the repo root (~12 KB), no errors. The `wasm-runtime/` directory contains `omd2typst_bg.wasm`.
 
 - [ ] **Step 3: Install into a test vault manually**
 
@@ -1628,6 +1618,7 @@ VAULT=~/path/to/your/vault
 mkdir -p "$VAULT/.obsidian/plugins/omd2typst"
 cp main.js manifest.json "$VAULT/.obsidian/plugins/omd2typst/"
 cp -r wasm-runtime "$VAULT/.obsidian/plugins/omd2typst/"
+# Ensure typst is installed: typst --version
 ```
 
 - [ ] **Step 4: Enable the plugin in Obsidian**
@@ -1677,8 +1668,8 @@ git commit -m "chore: verify end-to-end build and smoke tests pass"
 | 4 | `feat: add template language parsing and resolution` |
 | 5 | `feat: add frontmatter parse, merge, and key-extraction logic` |
 | 6 | `feat: add output path resolution for all three output modes` |
-| 7 | `feat: add lazy-init WASM wrappers for omd2typst and typst compiler` |
-| 8 | `feat: add exporter pipeline (MD → Typst → PDF)` |
+| 7 | `feat: add omd2typst WASM wrapper and typst CLI helper` |
+| 8 | `feat: add exporter pipeline (MD → Typst → PDF via system typst CLI)` |
 | 9 | `feat: register all commands and context menus in plugin main` |
 | 10 | `feat: add settings tab UI (templates, language, output, frontmatter)` |
 | 11 | `chore: verify end-to-end build and smoke tests pass` |
