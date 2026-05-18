@@ -271,7 +271,7 @@ pub const BUILTIN_TEMPLATE: &str = r##"// omd2typst template
 // ---------------------------------------------------------------------------
 
 fn doc_has_checkboxes(blocks: &[Block]) -> bool {
-    blocks.iter().any(|b| block_has_checkboxes(b))
+    blocks.iter().any(block_has_checkboxes)
 }
 
 fn block_has_checkboxes(block: &Block) -> bool {
@@ -279,11 +279,11 @@ fn block_has_checkboxes(block: &Block) -> bool {
         Block::BulletList(items) | Block::OrderedList(items) => {
             items.iter().any(|item| {
                 item.checkbox.is_some()
-                    || item.blocks.iter().any(|b| block_has_checkboxes(b))
+                    || item.blocks.iter().any(block_has_checkboxes)
             })
         }
         Block::Callout { body, .. } | Block::BlockQuote(body) => {
-            body.iter().any(|b| block_has_checkboxes(b))
+            body.iter().any(block_has_checkboxes)
         }
         _ => false,
     }
@@ -626,5 +626,5 @@ fn render_blocks_to_string(blocks: &[Block], level_offset: u8) -> String {
 
 /// Returns true if `idx` falls within the optional half-open range `[start, end)`.
 fn in_range(idx: usize, range: Option<(usize, usize)>) -> bool {
-    range.map_or(false, |(start, end)| idx >= start && idx < end)
+    range.is_some_and(|(start, end)| idx >= start && idx < end)
 }

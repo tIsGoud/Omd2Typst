@@ -439,8 +439,30 @@ version = "0.4.0"
 dependencies = [
  "anyhow",
  "clap",
+ "omd2typst-core",
+]
+
+[[package]]
+name = "omd2typst-core"
+version = "0.4.0"
+dependencies = [
  "comrak",
  "regex",
+]
+
+[[package]]
+name = "omd2typst-wasm"
+version = "0.4.0"
+dependencies = [
+ "omd2typst-core",
+ "wasm-bindgen",
+]
+
+[[package]]
+name = "omd2typst-web"
+version = "0.4.0"
+dependencies = [
+ "omd2typst-core",
 ]
 
 [[package]]

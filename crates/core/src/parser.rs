@@ -65,7 +65,7 @@ fn collect_footnotes<'a>(root: &'a AstNode<'a>) -> FootnoteMap {
 
 /// Splits a `---` YAML frontmatter block from the rest of the document.
 /// Returns (parsed key/value pairs, remaining markdown).
-fn split_frontmatter<'a>(input: &'a str) -> (Vec<(String, FrontmatterValue)>, &'a str) {
+fn split_frontmatter(input: &str) -> (Vec<(String, FrontmatterValue)>, &str) {
     let input = input.trim_start();
     if !input.starts_with("---") {
         return (vec![], input);
@@ -74,7 +74,7 @@ fn split_frontmatter<'a>(input: &'a str) -> (Vec<(String, FrontmatterValue)>, &'
     if let Some(close) = find_frontmatter_close(after_open) {
         let yaml = &after_open[..close].trim_start_matches('\n');
         let rest = &after_open[close + 4..]; // skip \n---
-        let rest = rest.trim_start_matches(|c| c == '\n' || c == '\r');
+        let rest = rest.trim_start_matches(['\n', '\r']);
         return (parse_yaml_frontmatter(yaml), rest);
     }
     (vec![], input)
