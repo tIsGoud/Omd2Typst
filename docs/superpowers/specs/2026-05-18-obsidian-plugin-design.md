@@ -13,7 +13,7 @@ An official Obsidian community plugin that brings omd2typst functionality direct
 
 ## Goals
 
-- Export Obsidian notes to `.typ` and/or PDF in one action
+- Export Obsidian notes to `.typ` or PDF in one action
 - Zero external dependencies — WASM-bundled, works on first install
 - Desktop only (macOS, Windows, Linux)
 - Publishable as an official Obsidian community plugin
@@ -120,10 +120,12 @@ obsidian-omd2typst/
 |---|---|---|
 | Export as PDF | ✓ | ✓ |
 | Export as Typst source (.typ) | ✓ | ✓ |
-| Export as both | ✓ | — |
 | Insert omd2typst frontmatter | ✓ | — |
+| Export built-in template | ✓ | — |
 
 **Template selection at export time:** When more than one template is configured and the user triggers export via the command palette, a quick-switcher modal appears with the default template pre-selected. Right-click export always uses the default template silently.
+
+**Export built-in template:** Writes the embedded `.typ` template to a user-specified location in the vault (file picker dialog). Mirrors the CLI's `--export-template` flag. The exported file serves as a customisation starting point; once edited, it can be added to the templates list and used for subsequent exports.
 
 ---
 
@@ -145,7 +147,7 @@ The "(Built-in)" template is always available and requires no file. One entry is
 
 ### Default output format
 
-Which format to produce: `Typst source (.typ)`, `PDF`, or `Both`. This is the vault-wide default; explicit per-action commands ("Export as PDF", "Export as Typst source") override it.
+Which format to produce: `Typst source (.typ)` or `PDF`. This is the vault-wide default; the explicit per-action commands ("Export as PDF", "Export as Typst source") always override it regardless of this setting.
 
 ### Output location
 
@@ -159,7 +161,9 @@ Three modes, selectable in settings:
 
 ### Default language
 
-A dropdown: `Nederlands (nl)` / `English (en)`. Applied when the note's frontmatter has no `language:` key. Language support is defined inside the Typst template, not enforced by the plugin — see Language Validation below.
+A dropdown: `English (en)` / `Nederlands (nl)`. Applied when the note's frontmatter has no `language:` key. Language support is defined inside the Typst template, not enforced by the plugin — see Language Validation below.
+
+The built-in embedded template defaults to **English**. When no Typst template is configured (i.e. the "(Built-in)" option is active), the plugin's default language setting determines the language passed to the embedded template. Custom templates declare their own supported languages via the `// omd2typst-languages:` comment and are not affected by this default.
 
 ### Default note frontmatter
 
@@ -281,8 +285,13 @@ Obsidian GUI layer (command registration, settings tab rendering) is covered by 
 
 ## Open Items (deferred to core library spec)
 
+The platform-level sections of this document (multi-consumer architecture diagram, CI/CD integration, release workflows, web service) will be extracted into a dedicated umbrella architecture document when the core library spec is written. That document will be the authoritative reference for the full platform; this spec will then cover only the Obsidian plugin.
+
+Specific items deferred:
+
 - Refactor `omd2typst` into `crates/core` + `crates/cli` + `crates/wasm` workspace structure.
 - Embed Typst library into CLI for zero-dependency binary.
 - Font loading strategy for embedded Typst (system fonts vs. bundled fallback set).
 - Callout rendering options passed as parameters (enables CLI/plugin divergence without forking).
 - Web service design (Axum server or Cloudflare Worker).
+- Umbrella architecture document covering all four consumers.
