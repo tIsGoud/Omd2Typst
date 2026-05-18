@@ -1,0 +1,11 @@
+[package]
+name = "omd2typst-core"
+version = "0.4.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Core Markdown→Typst conversion library for omd2typst"
+
+[dependencies]
+comrak = "0.28"
+regex = "1.10"
