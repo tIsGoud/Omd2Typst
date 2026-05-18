@@ -22,8 +22,9 @@ omd2typst workspace
         ├── crates/cli      → zero-dependency CLI binary (this refactor; Typst embedding in spec 2)
         │                     consumed by: CI/CD pipelines, direct user invocation
         │
-        ├── crates/wasm     → WASM build via wasm-pack
+        ├── crates/wasm     → WASM build via wasm-pack (Markdown → Typst only)
         │                     consumed by: obsidian-omd2typst plugin (separate repo, git submodule)
+        │                     PDF compilation in the plugin uses the system typst CLI, not a bundled Typst
         │
         └── crates/web      → HTTP web service (stub; specced separately)
                               consumed by: browser upload workflow
@@ -32,7 +33,7 @@ omd2typst workspace
 Each consumer depends only on `omd2typst-core`. The Obsidian plugin is an external consumer in its own repository; it is not a workspace member. It consumes `crates/wasm` by including this repo as a git submodule and running `wasm-pack build crates/wasm` at plugin build time.
 
 **Planned specs following this one:**
-- Spec 2: Embed Typst library into core + font loading strategy → zero-dependency CLI binary + release pipeline
+- Spec 2: Embed Typst library into CLI binary + font loading strategy → zero-dependency CLI binary + release pipeline. This applies to `crates/cli` only; the Obsidian plugin delegates PDF compilation to the user's installed `typst` binary.
 - Spec 3: SVG callout icons with accent-colour matching (extends `RenderOptions`)
 - Spec 4: Web service (Axum HTTP server using core natively)
 - Plugin plan update: target `crates/wasm` instead of the provisional `src/lib.rs` from the original plugin plan Task 1
@@ -194,11 +195,13 @@ use wasm_bindgen::prelude::*;
 use omd2typst_core::{parse_markdown, render_typst, RenderOptions, BUILTIN_TEMPLATE};
 
 /// Convert Markdown to a Typst source string.
-/// Pass the full content of a .typ template as template_src, or None for the built-in.
+/// Pass a vault-relative template path (e.g. "/typst/template.typ") or None for the built-in.
+/// The renderer emits `#import "<path>": template, callout` — the caller's Typst compiler
+/// resolves the import (plugin: via `--root <vaultBase>`; CLI: native filesystem).
 #[wasm_bindgen]
-pub fn render_to_typst(markdown: &str, template_src: Option<String>) -> String {
+pub fn render_to_typst(markdown: &str, template_path: Option<String>) -> String {
     let doc = parse_markdown(markdown);
-    render_typst(&doc, template_src.as_deref(), &RenderOptions::default())
+    render_typst(&doc, template_path.as_deref(), &RenderOptions::default())
 }
 
 /// Return the built-in Typst template source.
