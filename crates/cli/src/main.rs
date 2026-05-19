@@ -5,7 +5,6 @@ use omd2typst_core::{parse_markdown, render_typst, RenderOptions, BUILTIN_TEMPLA
 use clap::{Parser, ValueEnum};
 use anyhow::{Context, Result};
 use std::fs;
-use std::process::Command;
 
 #[derive(Parser)]
 #[command(
@@ -94,15 +93,8 @@ fn main() -> Result<()> {
     let input = fs::read_to_string(input_path)
         .with_context(|| format!("Cannot read input file: {}", input_path))?;
 
-    // Template path is resolved relative to the output directory.
-    // For PDF output the intermediate .typ lives in the same directory,
-    // so the relative path is identical — no second resolve needed.
-    let template_rel = cli.template.as_deref()
-        .map(|p| resolve_template_path(&output_path, p))
-        .transpose()?;
-
     let doc = parse_markdown(&input);
-    let typst_src = render_typst(&doc, template_rel.as_deref(), &RenderOptions::default());
+    let typst_src = render_typst(&doc, cli.template.as_deref(), &RenderOptions::default());
 
     match format {
         Format::Typst => {
@@ -110,23 +102,41 @@ fn main() -> Result<()> {
                 .with_context(|| format!("Cannot write: {}", output_path))?;
         }
         Format::Pdf => {
-            // Write to intermediate<timestamp>.typ in the same directory as the PDF.
-            let intermediate = intermediate_typ_path(&output_path);
-            fs::write(&intermediate, &typst_src)
-                .with_context(|| format!("Cannot write intermediate file: {}", intermediate.display()))?;
+            let root = std::env::current_dir()
+                .context("Cannot determine current directory")?;
+            let world = world::OmdWorld::new(root, typst_src);
+            let result = typst::compile::<typst::layout::PagedDocument>(&world);
 
-            let status = Command::new("typst")
-                .args(["compile"])
-                .arg(&intermediate)
-                .arg(&output_path)
-                .status()
-                .context("Failed to run `typst compile` — is typst installed?")?;
-
-            fs::remove_file(&intermediate).ok();
-
-            if !status.success() {
-                anyhow::bail!("`typst compile` failed with status {}", status);
+            for warning in &result.warnings {
+                eprintln!("warning: {}", warning.message);
             }
+
+            let document = result.output.map_err(|errors| {
+                let msg = errors
+                    .iter()
+                    .map(|e| {
+                        let file = e.span.id()
+                            .map(|id| id.vpath().as_rooted_path().display().to_string())
+                            .unwrap_or_else(|| "?".to_string());
+                        format!("  {file}: {}", e.message)
+                    })
+                    .collect::<Vec<_>>()
+                    .join("\n");
+                anyhow::anyhow!("Typst compilation failed:\n{msg}")
+            })?;
+
+            let pdf_bytes = typst_pdf::pdf(&document, &typst_pdf::PdfOptions::default())
+                .map_err(|errors| {
+                    let msg = errors
+                        .iter()
+                        .map(|e| format!("  {}", e.message))
+                        .collect::<Vec<_>>()
+                        .join("\n");
+                    anyhow::anyhow!("PDF generation failed:\n{msg}")
+                })?;
+
+            fs::write(&output_path, pdf_bytes)
+                .with_context(|| format!("Cannot write: {}", output_path))?;
         }
     }
 
@@ -136,45 +146,6 @@ fn main() -> Result<()> {
 // ---------------------------------------------------------------------------
 // Path helpers
 // ---------------------------------------------------------------------------
-
-/// Returns the path for the intermediate .typ file:
-/// same directory as `output`, filename = intermediate<YYYYMMDDHHmmss>.typ
-fn intermediate_typ_path(output: &str) -> std::path::PathBuf {
-    let dir = std::path::Path::new(output)
-        .parent()
-        .unwrap_or(std::path::Path::new("."));
-    dir.join(format!("intermediate-{}.typ", current_timestamp()))
-}
-
-/// Returns the current UTC time formatted as YYYYMMDDHHmmss.
-/// Uses Howard Hinnant's civil_from_days algorithm — no external crate needed.
-fn current_timestamp() -> String {
-    use std::time::{SystemTime, UNIX_EPOCH};
-
-    let total_secs = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_secs())
-        .unwrap_or(0) as i64;
-
-    let ss   = total_secs % 60;
-    let mm   = (total_secs / 60) % 60;
-    let hh   = (total_secs / 3600) % 24;
-    let days = total_secs / 86400;
-
-    // civil_from_days: converts days-since-epoch to (year, month, day)
-    let z   = days + 719_468;
-    let era = (if z >= 0 { z } else { z - 146_096 }) / 146_097;
-    let doe = z - era * 146_097;
-    let yoe = (doe - doe / 1_460 + doe / 36_524 - doe / 146_096) / 365;
-    let y   = yoe + era * 400;
-    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
-    let mp  = (5 * doy + 2) / 153;
-    let d   = doy - (153 * mp + 2) / 5 + 1;
-    let m   = if mp < 10 { mp + 3 } else { mp - 9 };
-    let y   = if m <= 2 { y + 1 } else { y };
-
-    format!("{:04}{:02}{:02}{:02}{:02}{:02}", y, m, d, hh, mm, ss)
-}
 
 /// Returns true if `a` and `b` resolve to the same filesystem path.
 fn paths_are_same(a: &str, b: &str) -> bool {
@@ -197,30 +168,3 @@ fn prefix_filename(path: &str, prefix: &str) -> String {
         .into_owned()
 }
 
-/// Returns a path to the template relative to the output .typ file's directory.
-/// Typst resolves #import paths relative to the importing file, not the cwd.
-fn resolve_template_path(output: &str, template: &str) -> Result<String> {
-    use std::path::{Component, Path};
-
-    let template_abs = Path::new(template)
-        .canonicalize()
-        .with_context(|| format!("Template file not found: {}", template))?;
-
-    let output_dir = Path::new(output).parent().unwrap_or(Path::new("."));
-    let output_dir_abs = output_dir
-        .canonicalize()
-        .unwrap_or_else(|_| std::env::current_dir().unwrap_or_default());
-
-    let from: Vec<_> = output_dir_abs.components().collect();
-    let to: Vec<_>   = template_abs.components().collect();
-    let common = from.iter().zip(to.iter()).take_while(|(a, b)| a == b).count();
-
-    let up = from.len() - common;
-    let mut parts: Vec<String> = (0..up).map(|_| "..".into()).collect();
-    parts.extend(to[common..].iter().filter_map(|c| match c {
-        Component::Normal(s) => Some(s.to_string_lossy().into_owned()),
-        _ => None,
-    }));
-
-    Ok(if parts.is_empty() { ".".into() } else { parts.join("/") })
-}
