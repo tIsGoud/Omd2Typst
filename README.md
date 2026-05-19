@@ -39,7 +39,7 @@ Obsidian note (.md)
 2. **Run omd2typst** to convert it to a Typst source file (`.typ`) or directly to a PDF.
 3. **Customise the template** (optional) to match your house style — cover page, fonts, colours, headers/footers, callout styles, etc.
 
-The two-step `.md → .typ → .pdf` pipeline is intentional: the intermediate `.typ` file is human-readable and can be inspected or hand-edited before compiling, which is useful for one-off adjustments without touching the original Markdown.
+The intermediate `.typ` output is optional — requesting a `.typ` output file produces a human-readable source that can be inspected or hand-edited before compiling, useful for one-off adjustments. When exporting directly to PDF, compilation happens in-process without writing an intermediate file to disk.
 
 ---
 
@@ -57,14 +57,28 @@ The two-step `.md → .typ → .pdf` pipeline is intentional: the intermediate `
 
 ## Installation
 
-### Prerequisites
+### Pre-built binary (Linux x86_64)
 
-- [Rust](https://rustup.rs) (stable)
-- [Typst](https://typst.app/docs/tutorial/) — required for PDF output
-
-### Build
+Download the latest `omd2typst-linux-x86_64` binary from the [Releases page](https://codeberg.org/tisgoud/omd2typst/releases), make it executable, and place it on your PATH:
 
 ```bash
+chmod +x omd2typst-linux-x86_64
+mv omd2typst-linux-x86_64 ~/.local/bin/omd2typst
+```
+
+### Build from source (macOS, Windows, Linux)
+
+Requires [Rust](https://rustup.rs) (stable):
+
+```bash
+cargo install omd2typst
+```
+
+Or clone and build:
+
+```bash
+git clone https://codeberg.org/tisgoud/omd2typst
+cd omd2typst
 cargo build --release
 # Binary: target/release/omd2typst
 ```
@@ -77,7 +91,7 @@ cargo build --release
 # Convert to Typst source
 omd2typst input.md output.typ
 
-# Convert directly to PDF (requires typst in PATH)
+# Convert directly to PDF
 omd2typst input.md output.pdf
 
 # Use a custom template
@@ -353,7 +367,7 @@ omd2typst-core is the shared foundation for four consumers:
 
 | Consumer | How it uses the core |
 |---|---|
-| **CLI** (`crates/cli`) | Native binary; shells out to `typst compile` for PDF |
+| **CLI** (`crates/cli`) | Native binary; Typst embedded — no external tools required |
 | **Obsidian plugin** ([obsidian-omd2typst](https://codeberg.org/tisgoud/obsidian-omd2typst)) | `crates/wasm` compiled via wasm-pack; PDF via system `typst` CLI |
 | **Web service** (`crates/web`) | Stub — specced separately |
 | **CI/CD pipelines** | CLI binary |
