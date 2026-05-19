@@ -1,6 +1,6 @@
 [package]
 name = "omd2typst"
-version = "0.4.0"
+version = "0.5.0"
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
@@ -14,3 +14,7 @@ path = "src/main.rs"
 omd2typst-core = { path = "../core" }
 anyhow = "1.0"
 clap = { version = "4.5", features = ["derive"] }
+typst = "0.13"
+typst-pdf = "0.13"
+typst-assets = { version = "0.13", features = ["fonts"] }
+comemo = "0.4"
