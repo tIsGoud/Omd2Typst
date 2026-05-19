@@ -1,3 +1,5 @@
+mod world;
+
 use omd2typst_core::{parse_markdown, render_typst, RenderOptions, BUILTIN_TEMPLATE};
 
 use clap::{Parser, ValueEnum};
