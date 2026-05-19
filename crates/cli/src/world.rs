@@ -17,6 +17,7 @@ pub struct OmdWorld {
 
 struct FontSlot {
     /// Source path for diagnostic purposes. `None` for embedded fonts.
+    #[allow(dead_code)]
     path: Option<PathBuf>,
     /// Font file bytes. Always `Some` — set at scan time for both embedded and system fonts.
     data: Bytes,
