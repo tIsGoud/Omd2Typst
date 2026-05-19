@@ -108,9 +108,14 @@ impl World for OmdWorld {
 /// Returns candidate directories for system fonts on macOS, Linux, and Windows.
 pub(crate) fn system_font_dirs() -> Vec<PathBuf> {
     let mut dirs = vec![
+        // macOS
+        PathBuf::from("/System/Library/Fonts"),
+        PathBuf::from("/System/Library/Fonts/Supplemental"),
+        PathBuf::from("/Library/Fonts"),
+        // Linux
         PathBuf::from("/usr/share/fonts"),
         PathBuf::from("/usr/local/share/fonts"),
-        PathBuf::from("/Library/Fonts"),
+        // Windows
         PathBuf::from("C:\\Windows\\Fonts"),
     ];
     if let Some(home) = std::env::var_os("HOME") {
