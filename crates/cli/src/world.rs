@@ -1,4 +1,4 @@
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use typst::foundations::Bytes;
 use typst::syntax::{FileId, Source, VirtualPath};
@@ -16,10 +16,10 @@ pub struct OmdWorld {
 }
 
 struct FontSlot {
-    /// `None` for embedded fonts (data is always present in `data`).
+    /// Source path for diagnostic purposes. `None` for embedded fonts.
     path: Option<PathBuf>,
-    /// `Some` for embedded fonts; `None` for system fonts (loaded on demand from `path`).
-    data: Option<Bytes>,
+    /// Font file bytes. Always `Some` — set at scan time for both embedded and system fonts.
+    data: Bytes,
     /// Face index within the font file.
     index: u32,
 }
@@ -37,7 +37,7 @@ impl OmdWorld {
                 book.push(font.info().clone());
                 fonts.push(FontSlot {
                     path: None,
-                    data: Some(bytes.clone()),
+                    data: bytes.clone(),
                     index,
                 });
                 index += 1;
@@ -82,27 +82,20 @@ impl World for OmdWorld {
         }
         let path = self.root.join(id.vpath().as_rootless_path());
         let text = std::fs::read_to_string(&path)
-            .map_err(|_| typst::diag::FileError::NotFound(path.into()))?;
+            .map_err(|e| typst::diag::FileError::from_io(e, &path))?;
         Ok(Source::new(id, text))
     }
 
     fn file(&self, id: FileId) -> typst::diag::FileResult<Bytes> {
         let path = self.root.join(id.vpath().as_rootless_path());
         let data = std::fs::read(&path)
-            .map_err(|_| typst::diag::FileError::NotFound(path.into()))?;
+            .map_err(|e| typst::diag::FileError::from_io(e, &path))?;
         Ok(Bytes::new(data))
     }
 
     fn font(&self, index: usize) -> Option<Font> {
         let slot = self.fonts.get(index)?;
-        let bytes = match &slot.data {
-            Some(b) => b.clone(),
-            None => {
-                let data = std::fs::read(slot.path.as_ref()?).ok()?;
-                Bytes::new(data)
-            }
-        };
-        Font::new(bytes, slot.index)
+        Font::new(slot.data.clone(), slot.index)
     }
 
     fn today(&self, _offset: Option<i64>) -> Option<typst::foundations::Datetime> {
@@ -112,7 +105,7 @@ impl World for OmdWorld {
 }
 
 /// Returns candidate directories for system fonts on macOS, Linux, and Windows.
-pub fn system_font_dirs() -> Vec<PathBuf> {
+pub(crate) fn system_font_dirs() -> Vec<PathBuf> {
     let mut dirs = vec![
         PathBuf::from("/usr/share/fonts"),
         PathBuf::from("/usr/local/share/fonts"),
@@ -125,7 +118,7 @@ pub fn system_font_dirs() -> Vec<PathBuf> {
     dirs
 }
 
-fn scan_font_dir(dir: &PathBuf, book: &mut FontBook, fonts: &mut Vec<FontSlot>) {
+fn scan_font_dir(dir: &Path, book: &mut FontBook, fonts: &mut Vec<FontSlot>) {
     let Ok(entries) = std::fs::read_dir(dir) else {
         return;
     };
@@ -146,7 +139,7 @@ fn scan_font_dir(dir: &PathBuf, book: &mut FontBook, fonts: &mut Vec<FontSlot>) 
                 book.push(font.info().clone());
                 fonts.push(FontSlot {
                     path: Some(path.clone()),
-                    data: None,
+                    data: bytes.clone(),
                     index,
                 });
                 index += 1;
