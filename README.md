@@ -21,16 +21,12 @@ Obsidian note (.md)
         │
         ▼
   ┌─────────────┐
-  │   omd2typst │  parse → intermediate AST → render
+  │   omd2typst │  parse → intermediate AST → render → compile (in-process)
   └─────────────┘
         │
         ├──► Typst source (.typ)   ← inspect or hand-edit if needed
         │
-        ▼
-  typst compile
-        │
-        ▼
-   PDF document
+        └──► PDF document          ← compiled in-process, no external tools
 ```
 
 ### Step by step
