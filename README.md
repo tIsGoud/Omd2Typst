@@ -205,6 +205,51 @@ let _lang = fm.at("language", default: "en")
 
 ---
 
+## Font handling
+
+Typst always embeds all fonts used by a document directly into the PDF. The output file is therefore self-contained: recipients do not need to install any font to view or print it correctly.
+
+### Embedded fallback fonts
+
+omd2typst bundles **Liberation Sans** and **Liberation Serif** inside the binary itself. They are always available regardless of what the host system has installed.
+
+These fonts serve as **style-correct fallbacks**: they sit at the end of every font stack in the built-in templates and preamble. When a preferred font such as Verdana or Arial is present on the system, it is used and embedded in the PDF. When it is absent — for example on a bare Linux CI runner — the fallback kicks in and Liberation Sans is embedded instead. The document always uses a sans-serif body font; it never silently falls back to a serif or monospace face.
+
+| Font | Metric-compatible with | Role |
+|---|---|---|
+| Liberation Sans | Arial / Helvetica | Sans-serif body text fallback |
+| Liberation Serif | Times New Roman | Serif body text fallback (for custom serif templates) |
+
+### User fonts directory
+
+Place any `.ttf` or `.otf` font files in a `fonts/` directory next to the `omd2typst` binary. These fonts are discovered automatically at startup and are available to any template.
+
+```
+my-project/
+  omd2typst          ← binary
+  fonts/
+    CorpSans-Regular.ttf
+    CorpSans-Bold.ttf
+  document.md
+  my-template.typ
+```
+
+This layout is convenient for CI/CD pipelines where the binary, input files, and custom fonts travel together as a unit.
+
+### Using Liberation fonts in custom templates
+
+Because Liberation Sans and Liberation Serif are always available, you can reference them directly in any custom template as a reliable fallback at the end of your font stack:
+
+```typst
+// Sans-serif template — Liberation Sans guarantees a consistent fallback
+set text(font: ("Your Custom Font", "Verdana", "Arial", "Liberation Sans"))
+
+// Serif template — Liberation Serif guarantees a consistent fallback
+set text(font: ("Your Serif Font", "Georgia", "Times New Roman", "Liberation Serif"))
+```
+
+---
+
 ## Supported Markdown / Obsidian features
 
 | Feature | Syntax | Notes |

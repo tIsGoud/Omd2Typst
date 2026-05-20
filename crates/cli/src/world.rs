@@ -45,7 +45,16 @@ impl OmdWorld {
             }
         }
 
-        // Pass 2: system fonts (Verdana, Arial, DejaVu, etc.).
+        // Pass 2: embedded Liberation fonts (guaranteed style-correct fallbacks).
+        for (data, index) in liberation_fonts() {
+            let bytes = Bytes::new(data);
+            if let Some(font) = Font::new(bytes.clone(), index) {
+                book.push(font.info().clone());
+                fonts.push(FontSlot { path: None, data: bytes, index });
+            }
+        }
+
+        // Pass 3: system fonts (Verdana, Arial, DejaVu, etc.).
         for dir in system_font_dirs() {
             scan_font_dir(&dir, &mut book, &mut fonts);
         }
@@ -121,7 +130,26 @@ pub(crate) fn system_font_dirs() -> Vec<PathBuf> {
     if let Some(home) = std::env::var_os("HOME") {
         dirs.push(PathBuf::from(home).join("Library/Fonts"));
     }
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(exe_dir) = exe.parent() {
+            dirs.push(exe_dir.join("fonts"));
+        }
+    }
     dirs
+}
+
+fn liberation_fonts() -> impl Iterator<Item = (&'static [u8], u32)> {
+    [
+        (include_bytes!("../fonts/LiberationSans-Regular.ttf").as_slice(), 0u32),
+        (include_bytes!("../fonts/LiberationSans-Bold.ttf").as_slice(), 0u32),
+        (include_bytes!("../fonts/LiberationSans-Italic.ttf").as_slice(), 0u32),
+        (include_bytes!("../fonts/LiberationSans-BoldItalic.ttf").as_slice(), 0u32),
+        (include_bytes!("../fonts/LiberationSerif-Regular.ttf").as_slice(), 0u32),
+        (include_bytes!("../fonts/LiberationSerif-Bold.ttf").as_slice(), 0u32),
+        (include_bytes!("../fonts/LiberationSerif-Italic.ttf").as_slice(), 0u32),
+        (include_bytes!("../fonts/LiberationSerif-BoldItalic.ttf").as_slice(), 0u32),
+    ]
+    .into_iter()
 }
 
 fn scan_font_dir(dir: &Path, book: &mut FontBook, fonts: &mut Vec<FontSlot>) {
@@ -176,5 +204,16 @@ mod tests {
     fn system_font_dirs_is_non_empty() {
         let dirs = system_font_dirs();
         assert!(!dirs.is_empty());
+    }
+
+    #[test]
+    fn liberation_fonts_load() {
+        for (data, index) in liberation_fonts() {
+            let bytes = Bytes::new(data);
+            assert!(
+                Font::new(bytes, index).is_some(),
+                "Liberation font face {index} failed to load"
+            );
+        }
     }
 }

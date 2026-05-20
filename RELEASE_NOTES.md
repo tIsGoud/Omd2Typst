@@ -1,0 +1,67 @@
+# Release Notes
+
+## v0.6.0 — Font consistency across all platforms
+
+### What changed
+
+**Guaranteed font fallbacks embedded in the binary**
+
+omd2typst now embeds **Liberation Sans** and **Liberation Serif** directly inside the binary. These open-source fonts (SIL Open Font License 1.1) serve as style-correct fallbacks in every built-in template and preamble.
+
+Before this release, the font stack `("Verdana", "Arial", "DejaVu Sans")` could silently fall back to a serif or monospace face on systems where none of those fonts were installed — for example, bare Linux CI runners. The resulting PDF used a completely different typeface than intended, without any warning to the user.
+
+With v0.6.0, Liberation Sans is always available. The fallback chain now ends on a guaranteed sans-serif face on every platform.
+
+**Font stack positions updated**
+
+All built-in templates and the default preamble have been updated so that Liberation Sans appears at the **end** of the font stack, not the front. Preferred system fonts (Verdana, Arial, Helvetica Neue) still take priority when available. Liberation Sans activates only as a last resort.
+
+| Template | Font stack |
+|---|---|
+| Built-in preamble | `("Verdana", "Arial", "Liberation Sans")` |
+| template-duo | `("Verdana", "Arial", "Liberation Sans")` |
+| template-duo-ribbon | `("Verdana", "Arial", "Liberation Sans")` |
+| template-ro | `("Verdana", "Arial", "Helvetica Neue", "Liberation Sans")` |
+| template-purple | `("Helvetica Neue", "Arial", "Liberation Sans")` |
+
+**User fonts directory**
+
+A `fonts/` directory placed next to the `omd2typst` binary is now scanned automatically at startup. Drop any `.ttf` or `.otf` file there to make it available to all templates — no system installation required. This is especially useful for CI/CD pipelines where the binary, fonts, and input files travel together.
+
+**Binary size**
+
+Embedding 8 Liberation font faces (Sans Regular/Bold/Italic/BoldItalic + Serif Regular/Bold/Italic/BoldItalic) adds approximately 3 MB to the binary. The release binary remains well below the pre-v0.5.0 baseline of 39 MB.
+
+---
+
+### How fonts work in omd2typst PDFs
+
+Typst always embeds every font used by a document directly into the output PDF. The PDF is self-contained: no font needs to be installed on the reader's system.
+
+The font stack in a template is a priority list. Typst tries each family left to right and uses the first one it finds. The Liberation fonts being embedded in the binary means they are always found — making them a reliable last resort that preserves the intended font style (sans-serif or serif) even when no other font in the list is available.
+
+---
+
+### Advice for custom templates
+
+To benefit from the guaranteed fallbacks in your own template, place `"Liberation Sans"` or `"Liberation Serif"` at the **end** of your font stack:
+
+```typst
+// Sans-serif body text — consistent on every platform
+set text(font: ("Your Corporate Font", "Verdana", "Arial", "Liberation Sans"))
+
+// Serif body text — consistent on every platform
+set text(font: ("Your Serif Font", "Georgia", "Times New Roman", "Liberation Serif"))
+```
+
+If your preferred font is installed and available, it will be used and embedded in the PDF. If it is absent — on a CI runner, a colleague's machine, or any other environment — Liberation preserves the correct font style automatically.
+
+---
+
+## v0.5.1 — Font directory fix for macOS
+
+Added `/System/Library/Fonts/Supplemental/` to the font search path, resolving warnings about unknown font families Arial and Verdana on macOS.
+
+## v0.5.0 — Zero-dependency PDF generation
+
+Replaced the external `typst` CLI subprocess with an embedded Typst compiler. omd2typst now produces PDFs without any external tools. Binary size reduced from 39 MB to 23 MB via LTO and size optimisation in the release profile.

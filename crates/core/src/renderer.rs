@@ -121,7 +121,7 @@ pub fn render_typst(doc: &Document, template: Option<&str>, _options: &RenderOpt
 // ---------------------------------------------------------------------------
 
 const BUILTIN_PREAMBLE: &str = r##"#set page(paper: "a4", margin: (x: 2.5cm, y: 3cm))
-#set text(font: ("Verdana", "Arial", "DejaVu Sans"), size: 11pt)
+#set text(font: ("Verdana", "Arial", "Liberation Sans"), size: 11pt)
 #set heading(numbering: "1.1.")
 #set table(stroke: 0.5pt)
 
@@ -240,7 +240,7 @@ pub const BUILTIN_TEMPLATE: &str = r##"// omd2typst template
     },
   )
 
-  set text(font: ("Verdana", "Arial", "DejaVu Sans"), size: 11pt)
+  set text(font: ("Verdana", "Arial", "Liberation Sans"), size: 11pt)
   set par(justify: true, leading: 0.65em)
   set heading(numbering: "1.1.")
 
