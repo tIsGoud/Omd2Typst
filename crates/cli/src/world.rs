@@ -30,7 +30,18 @@ impl OmdWorld {
         let mut book = FontBook::new();
         let mut fonts: Vec<FontSlot> = Vec::new();
 
-        // Pass 1: embedded fonts from typst-assets (compiled into the binary).
+        // Pass 1: embedded Liberation fonts — registered first so they are the
+        // global fallback for any unresolved family, including documents with no
+        // explicit font setting.
+        for (data, index) in liberation_fonts() {
+            let bytes = Bytes::new(data);
+            if let Some(font) = Font::new(bytes.clone(), index) {
+                book.push(font.info().clone());
+                fonts.push(FontSlot { path: None, data: bytes, index });
+            }
+        }
+
+        // Pass 2: embedded fonts from typst-assets (math, serif, monospace).
         for data in typst_assets::fonts() {
             let bytes = Bytes::new(data);
             let mut index = 0u32;
@@ -42,15 +53,6 @@ impl OmdWorld {
                     index,
                 });
                 index += 1;
-            }
-        }
-
-        // Pass 2: embedded Liberation fonts (guaranteed style-correct fallbacks).
-        for (data, index) in liberation_fonts() {
-            let bytes = Bytes::new(data);
-            if let Some(font) = Font::new(bytes.clone(), index) {
-                book.push(font.info().clone());
-                fonts.push(FontSlot { path: None, data: bytes, index });
             }
         }
 
