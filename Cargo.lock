@@ -1348,7 +1348,7 @@ dependencies = [
 
 [[package]]
 name = "omd2typst"
-version = "0.6.0"
+version = "0.6.1"
 dependencies = [
  "anyhow",
  "clap",
@@ -2489,8 +2489,6 @@ dependencies = [
 [[package]]
 name = "typst-library"
 version = "0.13.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "722b0d6dfd05aa5bb7da7f282586f624f452e3f285cd3a10ac0d7e99f3bc3048"
 dependencies = [
  "az",
  "bitflags 2.11.1",

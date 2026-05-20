@@ -2,7 +2,7 @@ use std::path::{Path, PathBuf};
 
 use typst::foundations::Bytes;
 use typst::syntax::{FileId, Source, VirtualPath};
-use typst::text::{Font, FontBook};
+use typst::text::{Font, FontBook, FontFamily, FontList, TextElem};
 use typst::utils::LazyHash;
 use typst::{Library, World};
 
@@ -64,8 +64,18 @@ impl OmdWorld {
         let main_id = FileId::new(None, VirtualPath::new("main.typ"));
         let main_source = Source::new(main_id, typ_source);
 
+        // Override the Typst default font ("Libertinus Serif") so that any
+        // document with no explicit font setting, or whose chosen font is
+        // unavailable, falls back to Liberation Sans (sans) rather than to a
+        // serif face. Libertinus Serif stays in the list so math still works.
+        let mut library = Library::builder().build();
+        library.styles.set(TextElem::set_font(FontList(vec![
+            FontFamily::new("Liberation Sans"),
+            FontFamily::new("Libertinus Serif"),
+        ])));
+
         Self {
-            library: LazyHash::new(Library::default()),
+            library: LazyHash::new(library),
             book: LazyHash::new(book),
             fonts,
             root,

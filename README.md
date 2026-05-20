@@ -213,12 +213,16 @@ Typst always embeds all fonts used by a document directly into the PDF. The outp
 
 omd2typst bundles **Liberation Sans** and **Liberation Serif** inside the binary itself. They are always available regardless of what the host system has installed.
 
-These fonts serve as **style-correct fallbacks**: they sit at the end of every font stack in the built-in templates and preamble. When a preferred font such as Verdana or Arial is present on the system, it is used and embedded in the PDF. When it is absent — for example on a bare Linux CI runner — the fallback kicks in and Liberation Sans is embedded instead. The document always uses a sans-serif body font; it never silently falls back to a serif or monospace face.
+These fonts are the **global last-resort fallback** for every document compiled by omd2typst:
+
+- When a preferred font such as Verdana or Arial is present on the system, it is used.
+- When none of the fonts in a template's font stack can be found — including external templates whose fonts are not installed — Liberation Sans is used instead of Typst's built-in default of Libertinus Serif.
+- A document always uses a sans-serif body font; it never silently falls back to a serif or monospace face.
 
 | Font | Metric-compatible with | Role |
 |---|---|---|
-| Liberation Sans | Arial / Helvetica | Sans-serif body text fallback |
-| Liberation Serif | Times New Roman | Serif body text fallback (for custom serif templates) |
+| Liberation Sans | Arial / Helvetica | Sans-serif fallback — last resort for any unavailable font |
+| Liberation Serif | Times New Roman | Serif fallback for templates that explicitly use it |
 
 ### User fonts directory
 

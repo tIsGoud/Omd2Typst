@@ -1,5 +1,27 @@
 # Release Notes
 
+## v0.6.1 — Liberation Sans as true global font fallback
+
+### What changed
+
+**Typst's internal fallback chain now routes through Liberation Sans**
+
+v0.6.0 embedded Liberation Sans in the binary and placed it at the end of every built-in font stack. That fixed the case where a built-in template's preferred fonts were unavailable. But there was a remaining gap: when an **external template** specified fonts that were all unavailable, the output still used Libertinus Serif (a serif face) — because Typst has a hardcoded internal fallback list that is appended to every font stack, and `libertinus serif` appears first on that list.
+
+v0.6.1 patches Typst's internal fallback list to insert `liberation sans` **before** `libertinus serif`. Because Liberation Sans is always embedded in the binary, it is always found. The result:
+
+| Scenario | Before v0.6.1 | After v0.6.1 |
+|---|---|---|
+| Built-in template, preferred font missing | Liberation Sans ✓ | Liberation Sans ✓ |
+| External template, all specified fonts missing | Libertinus Serif ✗ | Liberation Sans ✓ |
+| No template, no font set | Libertinus Serif ✗ | Liberation Sans ✓ |
+
+**Library-level default font**
+
+The embedded Typst compiler's default text font (used when no `set text(font: …)` rule is present anywhere) is now set to Liberation Sans instead of the Typst built-in default of Libertinus Serif. Documents with no explicit font setting get a sans-serif output rather than a serif one.
+
+---
+
 ## v0.6.0 — Font consistency across all platforms
 
 ### What changed
