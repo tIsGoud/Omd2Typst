@@ -171,7 +171,7 @@
     if paths != none {
       let cap_h = measure(text(fill: c.accent, weight: "bold")[H]).height
       let svg = "<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='" + c.accent.to-hex() + "' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round'>" + paths + "</svg>"
-      box(height: 1.5 * cap_h, baseline: 0pt, image(bytes(svg), format: "svg")) + h(4pt) + title
+      box(height: 1.5 * cap_h, baseline: 1.5 * cap_h / 12, image(bytes(svg), format: "svg")) + h(4pt) + title
     } else { title }
   }
   // top-right radius ≈ title bar height (7pt inset × 2 + 10.5pt font = ~25pt)

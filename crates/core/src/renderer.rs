@@ -162,7 +162,7 @@ const BUILTIN_PREAMBLE: &str = r##"#set page(paper: "a4", margin: (x: 2.5cm, y: 
     if paths != none {
       let cap_h = measure(text(fill: c.accent, weight: "bold")[H]).height
       let svg = "<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='" + c.accent.to-hex() + "' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round'>" + paths + "</svg>"
-      box(height: 1.5 * cap_h, baseline: 0pt, image(bytes(svg), format: "svg")) + h(4pt) + title
+      box(height: 1.5 * cap_h, baseline: 1.5 * cap_h / 12, image(bytes(svg), format: "svg")) + h(4pt) + title
     } else { title }
   }
   block(fill: c.fill, inset: (x: 12pt, y: 10pt), radius: 4pt, width: 100%)[
@@ -252,7 +252,7 @@ pub const BUILTIN_TEMPLATE: &str = r##"// omd2typst template
     if paths != none {
       let cap_h = measure(text(fill: c.accent, weight: "bold")[H]).height
       let svg = "<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='" + c.accent.to-hex() + "' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round'>" + paths + "</svg>"
-      box(height: 1.5 * cap_h, baseline: 0pt, image(bytes(svg), format: "svg")) + h(4pt) + title
+      box(height: 1.5 * cap_h, baseline: 1.5 * cap_h / 12, image(bytes(svg), format: "svg")) + h(4pt) + title
     } else { title }
   }
   block(fill: c.fill, inset: (x: 12pt, y: 10pt), radius: 4pt, width: 100%)[
