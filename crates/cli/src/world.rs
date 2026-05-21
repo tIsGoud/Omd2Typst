@@ -228,4 +228,37 @@ mod tests {
             );
         }
     }
+
+    #[test]
+    fn world_compiles_callout_document() {
+        use omd2typst_core::{parse_markdown, render_typst, RenderOptions};
+
+        // One callout from each colour group: blue, green, yellow, red, grey.
+        let md = "\
+> [!note] A Note\n\
+> This is a note.\n\
+\n\
+> [!tip] A Tip\n\
+> This is a tip.\n\
+\n\
+> [!warning] A Warning\n\
+> Be careful.\n\
+\n\
+> [!danger] Danger\n\
+> Watch out.\n\
+\n\
+> [!quote] A Quote\n\
+> Someone said something.\n\
+";
+        let doc = parse_markdown(md);
+        let typst_src = render_typst(&doc, None, &RenderOptions::default());
+
+        let world = OmdWorld::new(std::env::current_dir().unwrap(), typst_src);
+        let result = typst::compile::<typst::layout::PagedDocument>(&world);
+        assert!(
+            result.output.is_ok(),
+            "Typst compilation failed: {:?}",
+            result.output.err()
+        );
+    }
 }
