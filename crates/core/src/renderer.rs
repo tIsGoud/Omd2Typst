@@ -628,3 +628,48 @@ fn render_blocks_to_string(blocks: &[Block], level_offset: u8) -> String {
 fn in_range(idx: usize, range: Option<(usize, usize)>) -> bool {
     range.is_some_and(|(start, end)| idx >= start && idx < end)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{parse_markdown, RenderOptions};
+
+    fn render_callout(md: &str) -> String {
+        let doc = parse_markdown(md);
+        render_typst(&doc, None, &RenderOptions::default())
+    }
+
+    #[test]
+    fn callout_title_has_no_emoji() {
+        // The #callout() call in the output must pass a bare title — no emoji prefix.
+        let out = render_callout("> [!note] My Note\n> body text\n");
+        assert!(
+            out.contains("#callout(\"note\", \"My Note\")["),
+            "Expected bare title in callout call:\n{out}"
+        );
+    }
+
+    #[test]
+    fn callout_emits_svg_icon_in_preamble() {
+        // The preamble must define an image(bytes(...), format: "svg") for icons.
+        let out = render_callout("> [!note] My Note\n> body text\n");
+        assert!(
+            out.contains("image(bytes("),
+            "Expected image(bytes( in preamble:\n{out}"
+        );
+        assert!(
+            out.contains("format: \"svg\""),
+            "Expected format: \"svg\" in preamble:\n{out}"
+        );
+    }
+
+    #[test]
+    fn callout_unknown_kind_bare_title_no_panic() {
+        // Unknown kinds must still render without emoji and without panicking.
+        let out = render_callout("> [!foobar] Unknown\n> body\n");
+        assert!(
+            out.contains("#callout(\"foobar\", \"Unknown\")["),
+            "Expected bare title for unknown kind:\n{out}"
+        );
+    }
+}
