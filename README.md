@@ -271,7 +271,7 @@ set text(font: ("Your Serif Font", "Georgia", "Times New Roman", "Liberation Ser
 | Images — wikilink | `![[path\|200]]` | Obsidian wikilink format |
 | Code block | ` ```lang ``` ` | Language tag preserved for syntax highlighting |
 | Table | `| col |` | Left / center / right column alignment |
-| Callout | `> [!type] Title` | 13 built-in types with emoji icons |
+| Callout | `> [!type] Title` | 13 built-in types with Lucide SVG icons in each type's accent colour |
 | Block quote | `> text` | Left accent bar with indented text; same colour as the summary box border |
 | Bullet list | `- item` | Nested to any depth |
 | Ordered list | `1. item` | Nested to any depth |
@@ -285,18 +285,19 @@ set text(font: ("Your Serif Font", "Georgia", "Times New Roman", "Liberation Ser
 
 ### Callout types and icons
 
-| Type | Icon |
-|---|---|
-| `note` | 📝 |
-| `info` | 📖 |
-| `tip` / `hint` | 💡 |
-| `important` | ❗ |
-| `quote` / `cite` | 💬 |
-| `warning` / `caution` / `attention` | ⚠️ |
-| `danger` | 🔥 |
-| `error` | ❌ |
-| `bug` | 🐛 |
-| *(unknown type)* | 📌 |
+Each callout type has a Lucide SVG icon rendered inline before the title, stroked in the type's accent colour. Unknown types show the title without an icon.
+
+| Type | Lucide icon | Accent colour |
+|---|---|---|
+| `note` / `info` | info (circle + i) | blue `#1d4ed8` |
+| `tip` / `hint` | lightbulb | green `#15803d` |
+| `important` | circle-alert (circle + !) | green `#15803d` |
+| `warning` / `caution` / `attention` | triangle-alert | amber `#a16207` |
+| `danger` | flame | red `#b91c1c` |
+| `error` | circle-x | red `#b91c1c` |
+| `bug` | bug | red `#b91c1c` |
+| `quote` / `cite` | quote | slate `#475569` |
+| *(unknown type)* | *(none — title only)* | grey `#374151` |
 
 Callouts are non-breakable by default — they will not be split across a page break.
 

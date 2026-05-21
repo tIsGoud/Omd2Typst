@@ -1,5 +1,31 @@
 # Release Notes
 
+## v0.7.0 — Lucide SVG icons in callout blocks
+
+### What changed
+
+**Callout titles now display inline Lucide SVG icons instead of emoji prefixes.**
+
+Each of the 13 built-in callout types has a dedicated icon from the [Lucide](https://lucide.dev) icon set, rendered inline before the title text. The icon is stroked in the type's accent colour, matching the coloured background of the callout block itself.
+
+| Type | Icon | Accent colour |
+|---|---|---|
+| `note` / `info` | info (circle + i) | blue `#1d4ed8` |
+| `tip` / `hint` | lightbulb | green `#15803d` |
+| `important` | circle-alert (circle + !) | green `#15803d` |
+| `warning` / `caution` / `attention` | triangle-alert | amber `#a16207` |
+| `danger` | flame | red `#b91c1c` |
+| `error` | circle-x | red `#b91c1c` |
+| `bug` | bug | red `#b91c1c` |
+| `quote` / `cite` | quote | slate `#475569` |
+| *(unknown type)* | *(none — title only)* | grey `#374151` |
+
+Icons are embedded as SVG bytes directly in the Typst preamble — no external files or network access required. They scale with the title text and are always available regardless of what fonts or images are installed on the host system.
+
+**Custom template users:** the `callout(kind, title, body)` function signature is unchanged. The only visible difference is that `title` no longer carries an emoji prefix — it is now the bare title string. Custom templates that render their own icons or no icons are unaffected.
+
+---
+
 ## v0.6.1 — Liberation Sans as true global font fallback
 
 ### What changed
