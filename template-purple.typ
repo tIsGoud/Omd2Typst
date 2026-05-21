@@ -60,10 +60,13 @@
 #let callout(kind, title, body) = {
   let c = _co-colors.at(kind, default: (fill: rgb("#f3f4f6"), accent: rgb("#374151")))
   let paths = _co-icon-paths.at(kind, default: none)
-  let hdr = if paths != none {
-    let svg = "<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='" + c.accent.to-hex() + "' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'>" + paths + "</svg>"
-    box(height: 0.72em, baseline: 0pt, image(bytes(svg), format: "svg")) + h(4pt) + title
-  } else { title }
+  let hdr = context {
+    if paths != none {
+      let cap_h = measure(text(fill: c.accent, weight: "bold")[H]).height
+      let svg = "<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='" + c.accent.to-hex() + "' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'>" + paths + "</svg>"
+      box(height: cap_h, baseline: 0pt, image(bytes(svg), format: "svg")) + h(4pt) + title
+    } else { title }
+  }
   block(fill: c.fill, inset: (x: 12pt, y: 10pt), radius: 4pt, width: 100%)[
     #text(fill: c.accent, weight: "bold")[#hdr] \
     #body
