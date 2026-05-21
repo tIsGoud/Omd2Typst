@@ -289,29 +289,6 @@ fn block_has_checkboxes(block: &Block) -> bool {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Callout icon mapping
-// ---------------------------------------------------------------------------
-
-fn callout_icon(kind: &str) -> &'static str {
-    match kind {
-        "note"      => "📝",
-        "info"      => "📖",
-        "tip"       => "💡",
-        "hint"      => "💡",
-        "important" => "❗",
-        "warning"   => "⚠️",
-        "caution"   => "⚠️",
-        "attention" => "⚠️",
-        "danger"    => "🔥",
-        "error"     => "❌",
-        "bug"       => "🐛",
-        "quote"     => "💬",
-        "cite"      => "💬",
-        _           => "📌",
-    }
-}
-
 // Block rendering
 // ---------------------------------------------------------------------------
 
@@ -364,10 +341,9 @@ fn render_block(out: &mut String, block: &Block, level_offset: u8) {
             out.push_str(")\n\n");
         }
         Block::Callout { kind, title, body } => {
-            let icon = callout_icon(kind);
             out.push_str(&format!("#callout({}, {})[\n",
                 typst_string_val(kind),
-                typst_string_val(&format!("{} {}", icon, title))));
+                typst_string_val(title)));
             for b in body {
                 render_block(out, b, level_offset);
             }
