@@ -22,7 +22,7 @@ jobs:
             os: macos-latest
             archive: omd2typst-macos-arm64.tar.gz
           - target: x86_64-apple-darwin
-            os: macos-13
+            os: macos-latest
             archive: omd2typst-macos-x86_64.tar.gz
           - target: x86_64-pc-windows-msvc
             os: windows-latest
