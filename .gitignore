@@ -1,0 +1,7 @@
+target/
+input/
+output/
+templates/
+docs/
+api_test
+*.pdf
