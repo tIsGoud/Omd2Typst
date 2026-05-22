@@ -1,5 +1,30 @@
 # Release Notes
 
+## v0.7.2 — SVG icons for checkboxes
+
+### What changed
+
+**Checkbox items now display inline Lucide SVG icons instead of emoji.**
+
+Each checkbox type renders a coloured SVG glyph — no emoji font required.
+
+| Syntax | Icon | Colour |
+|---|---|---|
+| `- [ ]` | square outline | grey `#9ca3af` |
+| `- [x]` / `- [X]` | check-square | green `#16a34a` |
+| `- [/]` | clock | blue `#2563eb` |
+| `- [-]` | x-circle | grey `#6b7280` |
+| `- [>]` | arrow-right | blue `#2563eb` |
+| `- [!]` | alert-circle (circle + !) | red `#b91c1c` |
+| `- [?]` | help-circle | purple `#7c3aed` |
+| `- [i]` | info-circle (circle + i) | blue `#2563eb` |
+| `- [I]` | lightbulb | amber `#d97706` |
+| `- [*]` | star | amber `#d97706` |
+
+Icons are embedded as SVG bytes in the Typst preamble alongside the existing callout icons — no external files, fonts, or network access required.
+
+---
+
 ## v0.7.0 — Lucide SVG icons in callout blocks
 
 ### What changed
