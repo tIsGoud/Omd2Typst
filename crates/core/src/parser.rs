@@ -9,10 +9,11 @@ type FootnoteMap = HashMap<String, Vec<Inline>>;
 
 pub fn parse_markdown(input: &str) -> Document {
     let (frontmatter, body_raw) = split_frontmatter(input);
+    let body_no_comments = strip_obsidian_comments(body_raw);
     // Convert Obsidian wikilink images to standard Markdown before comrak sees them:
     //   ![[path|width]]  →  ![|width](path)
     //   ![[path]]        →  ![](path)
-    let body_owned = preprocess_obsidian_images(body_raw);
+    let body_owned = preprocess_obsidian_images(&body_no_comments);
     let body = body_owned.as_str();
 
     let arena = Arena::new();
@@ -457,6 +458,36 @@ pub fn collect_inline_text(inlines: &[Inline]) -> String {
 static OBSIDIAN_IMAGE_RE: OnceLock<Regex> = OnceLock::new();
 static FENCE_RE: OnceLock<Regex> = OnceLock::new();
 
+fn strip_obsidian_comments(input: &str) -> String {
+    let fence = FENCE_RE.get_or_init(|| Regex::new(r"^(```|~~~)").unwrap());
+    let mut out = String::with_capacity(input.len());
+    let mut in_fence = false;
+    let mut in_comment = false;
+
+    for line in input.split_inclusive('\n') {
+        if fence.is_match(line.trim_start()) {
+            in_fence = !in_fence;
+            out.push_str(line);
+            continue;
+        }
+        if in_fence {
+            out.push_str(line);
+            continue;
+        }
+        // Strip %% ... %% spans, tracking state across lines for block comments.
+        let mut chars = line.chars().peekable();
+        while let Some(ch) = chars.next() {
+            if ch == '%' && chars.peek() == Some(&'%') {
+                chars.next();
+                in_comment = !in_comment;
+            } else if !in_comment {
+                out.push(ch);
+            }
+        }
+    }
+    out
+}
+
 fn preprocess_obsidian_images(input: &str) -> String {
     // Matches:
     //   ![[path]]      → no width, no alt
@@ -555,5 +586,37 @@ fn capitalize(s: &str) -> String {
     match c.next() {
         None => String::new(),
         Some(f) => f.to_uppercase().collect::<String>() + c.as_str(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn strip_inline_comment() {
+        let out = strip_obsidian_comments("hello %%secret%% world\n");
+        assert_eq!(out, "hello  world\n");
+    }
+
+    #[test]
+    fn strip_block_comment() {
+        let out = strip_obsidian_comments("before\n%%\nhidden\n%%\nafter\n");
+        assert!(!out.contains("hidden"), "comment content must be stripped");
+        assert!(out.contains("before"), "content before comment must be kept");
+        assert!(out.contains("after"), "content after comment must be kept");
+    }
+
+    #[test]
+    fn comment_preserved_in_code_block() {
+        let input = "```\n%%not a comment%%\n```\n";
+        let out = strip_obsidian_comments(input);
+        assert_eq!(out, input);
+    }
+
+    #[test]
+    fn no_comments_unchanged() {
+        let input = "just normal text\n";
+        assert_eq!(strip_obsidian_comments(input), input);
     }
 }

@@ -345,7 +345,7 @@ The following Obsidian and Markdown features are **not** handled. They will eith
 |---|---|
 | Wikilinks `[[Page Name]]` | Internal note links have no meaning in a single-file PDF export |
 | Note embeds `![[Note Name]]` | Embedding other notes would require resolving the full vault at runtime |
-| Obsidian comments `%%…%%` | Currently passed through as plain text |
+| Obsidian comments `%%…%%` | Stripped from output (inline and block) |
 | Tags `#tag` | No equivalent concept in a PDF document |
 | Mermaid diagrams | Typst has no native Mermaid renderer |
 | Obsidian Tasks plugin fields | Due dates, priorities, recurrence — tool-specific syntax not in standard Markdown |
