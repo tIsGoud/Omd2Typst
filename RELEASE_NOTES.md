@@ -1,5 +1,26 @@
 # Release Notes
 
+## v0.7.3 — Strip Obsidian comments
+
+### What changed
+
+**`%%…%%` comment spans are now stripped from the output.**
+
+Both inline and block forms are handled:
+
+```markdown
+Some text %%this is a comment%% more text
+
+%%
+This entire block is a comment.
+It will not appear in the PDF.
+%%
+```
+
+Content inside fenced code blocks (```` ``` ```` or `~~~`) is preserved unchanged. Previously these spans were passed through as plain text.
+
+---
+
 ## v0.7.2 — SVG icons for checkboxes
 
 ### What changed
