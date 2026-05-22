@@ -9,9 +9,6 @@ description = "WASM bindings for omd2typst-core"
 [lib]
 crate-type = ["cdylib", "rlib"]
 
-[package.metadata.wasm-pack.profile.release]
-wasm-opt = false
-
 [dependencies]
 omd2typst-core = { path = "../core" }
 wasm-bindgen = "0.2"

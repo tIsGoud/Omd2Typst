@@ -22,5 +22,6 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
+      - run: sudo apt-get install -y binaryen
       - run: cargo install wasm-pack
       - run: wasm-pack build crates/wasm --target bundler
