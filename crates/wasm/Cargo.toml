@@ -10,7 +10,7 @@ description = "WASM bindings for omd2typst-core"
 crate-type = ["cdylib", "rlib"]
 
 [package.metadata.wasm-pack.profile.release]
-wasm-opt = ["-O", "--enable-bulk-memory"]
+wasm-opt = ["-O", "--all-features"]
 
 [dependencies]
 omd2typst-core = { path = "../core" }
