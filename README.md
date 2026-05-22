@@ -1,4 +1,4 @@
-# omd2typst
+# Omd2Typst
 
 Convert Obsidian Markdown notes to publication-quality PDFs via Typst.
 

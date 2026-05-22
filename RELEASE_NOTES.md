@@ -1,5 +1,11 @@
 # Release Notes
 
+## v0.7.4 — README improvements
+
+Minor typographic improvements to the README.
+
+---
+
 ## v0.7.3 — Strip Obsidian comments
 
 ### What changed
