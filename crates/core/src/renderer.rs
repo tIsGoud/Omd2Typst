@@ -75,9 +75,9 @@ pub fn render_typst(doc: &Document, template: Option<&str>, _options: &RenderOpt
     }
     out.push_str(")\n\n");
 
-    // Emit Font Awesome preamble only when the document contains checkbox items.
+    // Emit checkbox icon preamble only when the document contains checkbox items.
     if doc_has_checkboxes(&doc.blocks) {
-        out.push_str(FA_PREAMBLE);
+        out.push_str(CB_PREAMBLE);
     }
 
     match template {
@@ -173,26 +173,27 @@ const BUILTIN_PREAMBLE: &str = r##"#set page(paper: "a4", margin: (x: 2.5cm, y: 
 "##;
 
 // ---------------------------------------------------------------------------
-// Font Awesome preamble (emitted only when the document contains checkboxes)
+// Checkbox icon preamble (emitted only when the document contains checkboxes)
 // ---------------------------------------------------------------------------
 
-const FA_PREAMBLE: &str = r##"#let _co-icon(c) = {
-  // emoji — rendered via system color emoji font, no installation needed
-  let _icons = (
-    " ": "🔲",
-    "x": "✅",
-    "X": "✅",
-    "/": "🔄",
-    "-": "🚫",
-    ">": "➡️",
-    "!": "⚠️",
-    "?": "❓",
-    "i": "💡",
-    "I": "📖",
-    "*": "⭐",
-  )
-  let glyph = _icons.at(c, default: "🔲")
-  move(dy: -2pt, text(glyph))
+const CB_PREAMBLE: &str = r##"#let _cb-icons = (
+  " ": (color: rgb("#9ca3af"), paths: "<rect x='3' y='3' width='18' height='18' rx='2' ry='2'/>"),
+  "x": (color: rgb("#16a34a"), paths: "<polyline points='9 11 12 14 22 4'/><path d='M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11'/>"),
+  "X": (color: rgb("#16a34a"), paths: "<polyline points='9 11 12 14 22 4'/><path d='M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11'/>"),
+  "/": (color: rgb("#2563eb"), paths: "<circle cx='12' cy='12' r='10'/><polyline points='12 6 12 12 16 14'/>"),
+  "-": (color: rgb("#6b7280"), paths: "<circle cx='12' cy='12' r='10'/><line x1='15' y1='9' x2='9' y2='15'/><line x1='9' y1='9' x2='15' y2='15'/>"),
+  ">": (color: rgb("#2563eb"), paths: "<line x1='5' y1='12' x2='19' y2='12'/><polyline points='12 5 19 12 12 19'/>"),
+  "!": (color: rgb("#d97706"), paths: "<path d='M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z'/><line x1='12' y1='9' x2='12' y2='13'/><line x1='12' y1='17' x2='12.01' y2='17'/>"),
+  "?": (color: rgb("#7c3aed"), paths: "<circle cx='12' cy='12' r='10'/><path d='M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3'/><line x1='12' y1='17' x2='12.01' y2='17'/>"),
+  "i": (color: rgb("#d97706"), paths: "<line x1='9' y1='18' x2='15' y2='18'/><line x1='10' y1='22' x2='14' y2='22'/><path d='M15.09 14c.18-.98.65-1.74 1.41-2.5A4.65 4.65 0 0 0 18 8 6 6 0 0 0 6 8c0 1 .23 2.23 1.5 3.5A4.61 4.61 0 0 1 8.91 14'/>"),
+  "I": (color: rgb("#2563eb"), paths: "<path d='M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z'/><path d='M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z'/>"),
+  "*": (color: rgb("#d97706"), paths: "<polygon points='12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2'/>"),
+)
+#let _co-icon(c) = context {
+  let entry = _cb-icons.at(c, default: _cb-icons.at(" "))
+  let cap_h = measure(text(weight: "bold")[H]).height
+  let svg = "<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='" + entry.color.to-hex() + "' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round'>" + entry.paths + "</svg>"
+  box(height: cap_h, baseline: cap_h / 12, image(bytes(svg), format: "svg"))
 }
 "##;
 
@@ -683,6 +684,17 @@ mod tests {
             out.contains("format: \"svg\""),
             "Expected format: \"svg\" in preamble:\n{out}"
         );
+    }
+
+    #[test]
+    fn checkbox_uses_svg_icon_no_emoji() {
+        let doc = parse_markdown("- [x] done\n- [ ] todo\n- [/] in progress\n");
+        let out = render_typst(&doc, None, &RenderOptions::default());
+        assert!(out.contains("image(bytes("), "Expected image(bytes( for checkbox icons");
+        assert!(out.contains("format: \"svg\""), "Expected SVG format for checkbox icons");
+        // No emoji characters in output
+        assert!(!out.contains('✅'), "Expected no emoji in checkbox output");
+        assert!(!out.contains('🔲'), "Expected no emoji in checkbox output");
     }
 
     #[test]
