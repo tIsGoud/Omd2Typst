@@ -113,7 +113,7 @@ The following frontmatter keys have special meaning in the built-in template:
 | `figure-list` | Set to `true` to generate a list of figures after the table of contents |
 | `revision-table` | Name of the level-2 section that contains the revision history table |
 | `approval-table` | Name of the level-2 section that contains the approval table |
-| `language` | UI language for template strings. Supported out of the box: `nl` (default), `en`. See *Language support* below. |
+| `language` | UI language for template strings. Supported out of the box: `nl` (default), `en`, `de`, `es`, `fr`. See *Language support* below. |
 
 All frontmatter keys are also available in the template as a Typst dictionary `fm`, so you can add your own keys and reference them freely with `fm.at("key", default: "")`.
 
@@ -158,6 +158,34 @@ The section name in the frontmatter must match the heading text exactly (case-se
 
 ---
 
+## Example documents
+
+The `input/` directory contains a set of example documents that exercise the full feature set — cover page, table of contents, revision and approval tables, images, callouts, tables, lists, and a figure list.
+
+| File | Language |
+|---|---|
+| `input/input-nl.md` | Dutch (`nl`) |
+| `input/input-en.md` | English (`en`) |
+| `input/input-de.md` | German (`de`) |
+| `input/input-es.md` | Spanish (`es`) |
+| `input/input-fr.md` | French (`fr`) |
+
+All five files share the same structure and content; only the language and translated text differ. They rely on the image `input/_assets/laptop.png`.
+
+To compile one of the examples using the default embedded template:
+
+```bash
+omd2typst input/input-en.md output/input-en.pdf
+```
+
+To use a bundled template instead:
+
+```bash
+omd2typst input/input-en.md output/input-en.pdf --template templates/template-duo.typ
+```
+
+---
+
 ## Templates
 
 A template is a `.typ` file that must export two symbols:
@@ -177,7 +205,15 @@ Then edit it and pass it back with `--template my-template.typ`.
 
 Templates contain a `_lang_strings` dictionary that maps language codes to UI strings (table-of-contents label, page counter, figure list header, metadata labels, etc.). The active language is selected with the `language` frontmatter key; when the key is absent the template falls back to its own default language.
 
-**Supported languages** in the built-in templates: `nl` (Dutch, default) and `en` (English).
+**Supported languages** in the built-in templates:
+
+| Code | Language |
+|---|---|
+| `nl` | Dutch (default) |
+| `en` | English |
+| `de` | German |
+| `es` | Spanish |
+| `fr` | French |
 
 **Selecting a language:**
 
