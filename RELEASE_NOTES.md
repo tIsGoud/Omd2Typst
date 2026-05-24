@@ -1,6 +1,6 @@
 # Release Notes
 
-## v0.7.5 — Cover page for embedded template
+## v0.7.5 — Cover page, de/es/fr language support, example documents
 
 ### What changed
 
