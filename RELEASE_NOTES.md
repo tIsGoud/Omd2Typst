@@ -1,5 +1,37 @@
 # Release Notes
 
+## v0.7.5 — Cover page for embedded template
+
+### What changed
+
+**The built-in template (used when no `--template` flag is given) now renders a structured cover page.**
+
+When your document has frontmatter, the cover page is populated automatically:
+
+| Field | Displayed as |
+|---|---|
+| `title` | Large heading (28 pt, dark blue) |
+| `subtitle` | Sub-heading below the title |
+| `summary` | Left-bordered block below the dividing line |
+| `version` | Metadata grid, bottom-left |
+| `author` | Metadata grid, bottom-right |
+| `date` | Metadata grid, bottom-left |
+| `status` | Metadata grid, bottom-right |
+
+Only non-empty fields are shown — missing fields leave no blank space. When no `title` is provided a placeholder message points to the README frontmatter section.
+
+Content pages (page 3 onwards) now carry a header with the document title and a centred page-number footer. The cover page (page 1) and table of contents (page 2) have no header or footer.
+
+**Exported templates updated**
+
+The `template` function exported by `--export-template` gains an `fm` parameter (`template(fm: (:), doc)`). This matches the calling convention already used by the bundled templates (`#show: template.with(fm: fm)`). Existing customised templates that declare `template(doc)` continue to work — the new parameter has a safe default.
+
+**Bug fix: empty frontmatter no longer crashes**
+
+Documents with no frontmatter previously generated `#let fm = ()` (an empty Typst array). Calling `.at("key", default: …)` on an array expects an integer index, not a string key, so any template that accessed `fm` would fail with *"expected integer, found string"*. The renderer now emits `#let fm = (:)` (an empty Typst dictionary) in this case.
+
+---
+
 ## v0.7.4 — README improvements
 
 Minor typographic improvements to the README.
