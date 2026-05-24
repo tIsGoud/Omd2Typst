@@ -30,6 +30,20 @@ The `template` function exported by `--export-template` gains an `fm` parameter 
 
 Documents with no frontmatter previously generated `#let fm = ()` (an empty Typst array). Calling `.at("key", default: …)` on an array expects an integer index, not a string key, so any template that accessed `fm` would fail with *"expected integer, found string"*. The renderer now emits `#let fm = (:)` (an empty Typst dictionary) in this case.
 
+**German, Spanish, and French added to all bundled templates**
+
+All five bundled templates (`template-duo`, `template-duo-ribbon`, `template-purple`, `template-ro`, `template-vnet`) now include language strings for `de`, `es`, and `fr` in addition to the existing `nl` and `en` entries. Select a language with the `language` frontmatter key:
+
+```yaml
+language: de   # Deutsch
+language: es   # Español
+language: fr   # Français
+```
+
+**Example documents published**
+
+The `input/` directory now contains five example documents (Dutch, English, German, Spanish, French) that exercise the full feature set: cover page, table of contents, revision and approval tables, images, callouts, tables, lists, and a figure list.
+
 ---
 
 ## v0.7.4 — README improvements
