@@ -60,20 +60,30 @@ pub fn render_typst(doc: &Document, template: Option<&str>, _options: &RenderOpt
         }
     }
     // Always emit fm dict so templates can use fm.at("key", default: "").
-    out.push_str("#let fm = (\n");
-    for (key, _) in &doc.frontmatter {
-        out.push_str(&format!("  \"{}\": {},\n", key, key));
+    // Use (:) (empty Typst dict) when there are no entries; plain () is an
+    // empty array whose .at() requires an integer index, not a string key.
+    let fm_has_entries = !doc.frontmatter.is_empty()
+        || synth_title.is_some()
+        || revision_range.is_some()
+        || approval_range.is_some();
+    if fm_has_entries {
+        out.push_str("#let fm = (\n");
+        for (key, _) in &doc.frontmatter {
+            out.push_str(&format!("  \"{}\": {},\n", key, key));
+        }
+        if let Some(ref t) = synth_title {
+            out.push_str(&format!("  \"title\": {},\n", typst_string_val(t)));
+        }
+        if revision_range.is_some() {
+            out.push_str("  \"revision-blocks\": _revision_blocks,\n");
+        }
+        if approval_range.is_some() {
+            out.push_str("  \"approval-blocks\": _approval_blocks,\n");
+        }
+        out.push_str(")\n\n");
+    } else {
+        out.push_str("#let fm = (:)\n\n");
     }
-    if let Some(ref t) = synth_title {
-        out.push_str(&format!("  \"title\": {},\n", typst_string_val(t)));
-    }
-    if revision_range.is_some() {
-        out.push_str("  \"revision-blocks\": _revision_blocks,\n");
-    }
-    if approval_range.is_some() {
-        out.push_str("  \"approval-blocks\": _approval_blocks,\n");
-    }
-    out.push_str(")\n\n");
 
     // Emit checkbox icon preamble only when the document contains checkbox items.
     if doc_has_checkboxes(&doc.blocks) {
@@ -95,15 +105,7 @@ pub fn render_typst(doc: &Document, template: Option<&str>, _options: &RenderOpt
         }
         None => {
             out.push_str(BUILTIN_PREAMBLE);
-            // Inline title block from the first level-1 heading.
-            if let Some(idx) = title_idx {
-                if let Block::Heading { inlines, .. } = &doc.blocks[idx] {
-                    out.push_str("\n#align(center)[\n");
-                    out.push_str("  #text(size: 26pt, weight: \"bold\")[");
-                    render_inlines(&mut out, inlines);
-                    out.push_str("]\n]\n");
-                }
-            }
+            out.push_str(BUILTIN_COVER);
             out.push_str("\n#outline(indent: 1em)\n\n#pagebreak()\n\n");
             for (i, block) in doc.blocks.iter().enumerate() {
                 if Some(i) == title_idx { continue; }
@@ -120,7 +122,24 @@ pub fn render_typst(doc: &Document, template: Option<&str>, _options: &RenderOpt
 // Built-in preamble (used when no --template is given)
 // ---------------------------------------------------------------------------
 
-const BUILTIN_PREAMBLE: &str = r##"#set page(paper: "a4", margin: (x: 2.5cm, y: 3cm))
+const BUILTIN_PREAMBLE: &str = r##"#set page(
+  paper: "a4",
+  margin: (x: 2.5cm, y: 3cm),
+  header: context {
+    if counter(page).get().first() > 2 {
+      set text(size: 9pt, fill: luma(120))
+      line(length: 100%, stroke: 0.4pt + luma(180))
+      v(-8pt)
+      align(right)[#fm.at("title", default: "")]
+    }
+  },
+  footer: context {
+    if counter(page).get().first() > 2 {
+      set text(size: 9pt, fill: luma(120))
+      align(center)[#counter(page).display("1 / 1", both: true)]
+    }
+  },
+)
 #set text(font: ("Verdana", "Arial", "Liberation Sans"), size: 11pt)
 #set heading(numbering: "1.1.")
 #set table(stroke: 0.5pt)
@@ -170,6 +189,53 @@ const BUILTIN_PREAMBLE: &str = r##"#set page(paper: "a4", margin: (x: 2.5cm, y: 
     #body
   ]
 }
+"##;
+
+// ---------------------------------------------------------------------------
+// Built-in cover page (used when no --template is given)
+// ---------------------------------------------------------------------------
+
+const BUILTIN_COVER: &str = r##"
+#page(margin: (x: 2.5cm, y: 3cm), header: none, footer: none)[
+  #let _t  = fm.at("title",    default: "")
+  #let _st = fm.at("subtitle", default: "")
+  #let _au = fm.at("author",   default: "")
+  #let _dt = fm.at("date",     default: "")
+  #let _vs = fm.at("version",  default: "")
+  #let _ss = fm.at("status",   default: "")
+  #let _su = fm.at("summary",  default: "")
+  #v(1fr)
+  #if _t != "" [
+    #text(size: 28pt, weight: "bold", fill: rgb("#1e3a5f"))[#_t]
+    #if _st != "" [
+      #v(0.3cm)
+      #text(size: 16pt, fill: rgb("#2c5282"))[#_st]
+    ]
+    #v(0.6cm)
+    #line(length: 100%, stroke: 1.5pt + rgb("#1e3a5f"))
+    #if _su != "" [
+      #v(0.4cm)
+      #block(stroke: (left: 3pt + rgb("#1e3a5f")), inset: (left: 12pt, y: 6pt))[#_su]
+    ]
+    #v(1fr)
+    #grid(
+      columns: (1fr, 1fr),
+      row-gutter: 0.4em,
+      [#if _vs != "" [*Version:* #_vs]], [#if _au != "" [*Author:* #_au]],
+      [#if _dt != "" [*Date:* #_dt]],    [#if _ss != "" [*Status:* #_ss]],
+    )
+  ] else [
+    #text(size: 16pt, fill: luma(120))[_No title found._]
+    #v(0.4cm)
+    #text(size: 10pt, fill: luma(120))[
+      Add frontmatter to your document to populate this cover page. \
+      Supported fields: `title`, `subtitle`, `author`, `date`, `version`, `status`, `summary`. \
+      See the README for details.
+    ]
+    #v(1fr)
+  ]
+  #v(0.5cm)
+]
 "##;
 
 // ---------------------------------------------------------------------------
@@ -263,9 +329,9 @@ pub const BUILTIN_TEMPLATE: &str = r##"// omd2typst template
 }
 
 // ---------------------------------------------------------------------------
-// template(doc) — applied via  #show: template
+// template(fm, doc) — applied via  #show: template.with(fm: fm)
 // ---------------------------------------------------------------------------
-#let template(doc) = {
+#let template(fm: (:), doc) = {
   set page(
     paper: "a4",
     margin: (x: 2.5cm, y: 3cm),
@@ -274,9 +340,7 @@ pub const BUILTIN_TEMPLATE: &str = r##"// omd2typst template
         set text(size: 9pt, fill: luma(120))
         line(length: 100%, stroke: 0.4pt + luma(180))
         v(-8pt)
-        // Use a frontmatter variable if available, otherwise a static string.
-        // Example: align(right)[#title]
-        align(right)[_omd2typst_]
+        align(right)[#fm.at("title", default: "")]
       }
     },
     footer: context {
@@ -308,6 +372,54 @@ pub const BUILTIN_TEMPLATE: &str = r##"// omd2typst template
   show raw.where(block: true): it => block(
     fill: luma(245), inset: (x: 10pt, y: 8pt), radius: 4pt, width: 100%, it,
   )
+
+  // Cover page
+  {
+    let _t  = fm.at("title",    default: "")
+    let _st = fm.at("subtitle", default: "")
+    let _au = fm.at("author",   default: "")
+    let _dt = fm.at("date",     default: "")
+    let _vs = fm.at("version",  default: "")
+    let _ss = fm.at("status",   default: "")
+    let _su = fm.at("summary",  default: "")
+    page(margin: (x: 2.5cm, y: 3cm), header: none, footer: none)[
+      #v(1fr)
+      #if _t != "" [
+        #text(size: 28pt, weight: "bold", fill: rgb("#1e3a5f"))[#_t]
+        #if _st != "" [
+          #v(0.3cm)
+          #text(size: 16pt, fill: rgb("#2c5282"))[#_st]
+        ]
+        #v(0.6cm)
+        #line(length: 100%, stroke: 1.5pt + rgb("#1e3a5f"))
+        #if _su != "" [
+          #v(0.4cm)
+          #block(stroke: (left: 3pt + rgb("#1e3a5f")), inset: (left: 12pt, y: 6pt))[#_su]
+        ]
+        #v(1fr)
+        #grid(
+          columns: (1fr, 1fr),
+          row-gutter: 0.4em,
+          [#if _vs != "" [*Version:* #_vs]], [#if _au != "" [*Author:* #_au]],
+          [#if _dt != "" [*Date:* #_dt]],    [#if _ss != "" [*Status:* #_ss]],
+        )
+      ] else [
+        #text(size: 16pt, fill: luma(120))[_No title found._]
+        #v(0.4cm)
+        #text(size: 10pt, fill: luma(120))[
+          Add frontmatter to your document to populate this cover page. \
+          Supported fields: `title`, `subtitle`, `author`, `date`, `version`, `status`, `summary`. \
+          See the README for details.
+        ]
+        #v(1fr)
+      ]
+      #v(0.5cm)
+    ]
+  }
+
+  // Table of contents
+  outline(indent: 1em)
+  pagebreak()
 
   doc
 }
