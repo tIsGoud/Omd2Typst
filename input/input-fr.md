@@ -6,7 +6,7 @@ version: 0.9
 status: Brouillon
 language: fr
 date: 14-05-2026
-summary: Ce document est un document d'exemple pour tester les fonctionnalités d'omd2typst. Il contient une page de titre, une table des matières, des tableaux, des images et des blocs d'alerte. En option : une liste de figures et des sections de révision et d'approbation.
+summary: Ce document est un document d'exemple pour tester les fonctionnalités d'omd2typst. Il contient une page de titre, une table des matières, des tableaux, des images et des blocs d'alerte. En option; une liste de figures et des sections de révision et d'approbation.
 figure-list: true
 revision-table: Révision
 approval-table: Approbation
