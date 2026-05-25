@@ -1,5 +1,24 @@
 # Release Notes
 
+## v0.8.0 — Sample templates, input examples, AGPL-3.0 license
+
+### What changed
+
+**Sample templates added**
+Two public Typst templates are now included in the repository under `templates/`:
+- `purple-template.typ` — Obsidian-branded purple accent template
+- `tig-template.typ` — tiG-branded orange gradient template
+
+Both templates support all five languages (`nl`, `en`, `de`, `es`, `fr`) and have fully embedded SVG logos.
+
+**Input examples added**
+Example input documents in all five supported languages are available under `input/`.
+
+**License**
+The project is now published under the GNU Affero General Public License v3.0 (AGPL-3.0-only).
+
+---
+
 ## v0.7.5 — Cover page, de/es/fr language support, example documents
 
 ### What changed
