@@ -1,6 +1,5 @@
 target/
 output/
-templates/
 docs/
 api_test
-*.pdf
+run.sh
