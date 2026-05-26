@@ -1,5 +1,11 @@
 # Release Notes
 
+## v0.9.0 — License corrected to AGPL-3.0
+
+License corrected from MIT to AGPL-3.0-only across all manifests and the LICENSE file. No functional changes.
+
+---
+
 ## v0.8.0 — Sample templates, input examples, AGPL-3.0 license
 
 ### What changed

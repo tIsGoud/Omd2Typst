@@ -53,13 +53,23 @@ The intermediate `.typ` output is optional — requesting a `.typ` output file p
 
 ## Installation
 
-### Pre-built binary (Linux x86_64)
+### Pre-built binary
 
-Download the latest `omd2typst-linux-x86_64` binary from the [Releases page](https://codeberg.org/tisgoud/omd2typst/releases), make it executable, and place it on your PATH:
+Download the archive for your platform from the [Releases page](https://github.com/tIsGoud/Omd2Typst/releases/latest):
+
+| Platform | Archive |
+|---|---|
+| Linux x86_64 | `omd2typst-linux-x86_64.tar.gz` |
+| macOS Apple Silicon | `omd2typst-macos-arm64.tar.gz` |
+| macOS Intel | `omd2typst-macos-x86_64.tar.gz` |
+| Windows x86_64 | `omd2typst-windows-x86_64.zip` |
+
+Extract and place the binary on your PATH:
 
 ```bash
-chmod +x omd2typst-linux-x86_64
-mv omd2typst-linux-x86_64 ~/.local/bin/omd2typst
+# macOS / Linux
+tar xzf omd2typst-*.tar.gz
+mv omd2typst ~/.local/bin/omd2typst
 ```
 
 ### Build from source (macOS, Windows, Linux)
@@ -67,14 +77,8 @@ mv omd2typst-linux-x86_64 ~/.local/bin/omd2typst
 Requires [Rust](https://rustup.rs) (stable):
 
 ```bash
-cargo install omd2typst
-```
-
-Or clone and build:
-
-```bash
-git clone https://codeberg.org/tisgoud/omd2typst
-cd omd2typst
+git clone https://github.com/tIsGoud/Omd2Typst
+cd Omd2Typst
 cargo build --release
 # Binary: target/release/omd2typst
 ```
@@ -450,6 +454,6 @@ omd2typst-core is the shared foundation for four consumers:
 | Consumer | How it uses the core |
 |---|---|
 | **CLI** (`crates/cli`) | Native binary; Typst embedded — no external tools required |
-| **Obsidian plugin** ([obsidian-omd2typst](https://codeberg.org/tisgoud/obsidian-omd2typst)) | `crates/wasm` compiled via wasm-pack; PDF via system `typst` CLI |
+| **Obsidian plugin** ([obsidian-omd2typst](https://github.com/tIsGoud/Obsidian-Omd2Typst)) | `crates/wasm` compiled via wasm-pack; PDF via system `typst` CLI |
 | **Web service** (`crates/web`) | Stub — specced separately |
 | **CI/CD pipelines** | CLI binary |
