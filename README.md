@@ -425,7 +425,7 @@ For LaTeX compatibility the [`mitex`](https://typst.app/universe/package/mitex) 
 
 ## Project structure
 
-This repository is a Cargo workspace with four crates:
+This repository is a Cargo workspace with five crates:
 
 ```
 crates/
@@ -439,6 +439,8 @@ crates/
     src/main.rs     — CLI (clap), file I/O, typst invocation
   wasm/         — omd2typst-wasm (cdylib) — WASM bindings for the Obsidian plugin
     src/lib.rs      — render_to_typst, get_builtin_template via wasm-bindgen
+  pdf-wasm/     — omd2typst-pdf-wasm (cdylib) — standalone Typst→PDF WASM compiler
+    src/lib.rs      — render_to_pdf, typst_version via wasm-bindgen
   web/          — omd2typst-web (stub, specced separately)
     src/main.rs     — todo!()
 ```
@@ -454,6 +456,6 @@ omd2typst-core is the shared foundation for four consumers:
 | Consumer | How it uses the core |
 |---|---|
 | **CLI** (`crates/cli`) | Native binary; Typst embedded — no external tools required |
-| **Obsidian plugin** ([obsidian-omd2typst](https://github.com/tIsGoud/Obsidian-Omd2Typst)) | `crates/wasm` compiled via wasm-pack; PDF via system `typst` CLI |
+| **Obsidian plugin** ([obsidian-omd2typst](https://github.com/tIsGoud/Obsidian-Omd2Typst)) | `crates/wasm` compiled via wasm-pack for Markdown→Typst; PDF via system `typst` CLI |
 | **Web service** (`crates/web`) | Stub — specced separately |
 | **CI/CD pipelines** | CLI binary |
