@@ -83,14 +83,24 @@ jobs:
           print(match.group(1).strip() if match else '')
           PYEOF
 
-      - name: Create release
+      - name: Create or update release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release create ${{ github.ref_name }} \
+          # Create the release only if it does not already exist.
+          # A release may be pre-created manually (e.g. to attach a WASM artifact
+          # before CI runs), in which case we skip creation and just upload binaries.
+          if ! gh release view ${{ github.ref_name }} --repo ${{ github.repository }} > /dev/null 2>&1; then
+            gh release create ${{ github.ref_name }} \
+              --repo ${{ github.repository }} \
+              --title "${{ github.ref_name }}" \
+              --notes-file notes.md
+          fi
+
+          # Upload binaries — --clobber overwrites if assets already exist (safe re-run).
+          gh release upload ${{ github.ref_name }} \
             --repo ${{ github.repository }} \
-            --title "${{ github.ref_name }}" \
-            --notes-file notes.md \
+            --clobber \
             omd2typst-linux-x86_64.tar.gz \
             omd2typst-macos-arm64.tar.gz \
             omd2typst-macos-x86_64.tar.gz \
