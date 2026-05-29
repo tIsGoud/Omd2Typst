@@ -131,18 +131,34 @@ pub fn typst_version() -> String {
 
 /// Compile Typst source to a PDF byte array.
 ///
-/// `typ_source`  — full Typst source document (output of render_to_typst).
-/// `files_json`  — JSON object mapping vault-relative paths to UTF-8 file
-///                 contents (e.g. `{ "typst/my-template.typ": "..." }`).
-///                 Required for any `#import` paths the document references.
+/// `typ_source`        — full Typst source document (output of render_to_typst).
+/// `files_json`        — JSON object mapping vault-relative paths to UTF-8 file
+///                       contents (e.g. `{ "typst/my-template.typ": "..." }`).
+///                       Required for any `#import` paths the document references.
+/// `binary_files_json` — JSON object mapping vault-relative paths to standard
+///                       base64-encoded binary content (e.g. images). Pass `"{}"`
+///                       if there are no binary files.
 #[wasm_bindgen]
-pub fn render_to_pdf(typ_source: &str, files_json: &str) -> Result<Vec<u8>, JsValue> {
+pub fn render_to_pdf(typ_source: &str, files_json: &str, binary_files_json: &str) -> Result<Vec<u8>, JsValue> {
     let text_files: HashMap<String, String> = serde_json::from_str(files_json)
         .map_err(|e| JsValue::from_str(&format!("Invalid files JSON: {e}")))?;
-    let files: HashMap<String, Vec<u8>> = text_files
+    let mut files: HashMap<String, Vec<u8>> = text_files
         .into_iter()
         .map(|(k, v)| (k, v.into_bytes()))
         .collect();
+
+    // Decode base64-encoded binary files (images, etc.) and merge into the map.
+    if binary_files_json != "{}" && !binary_files_json.is_empty() {
+        use base64::Engine;
+        let binary_map: HashMap<String, String> = serde_json::from_str(binary_files_json)
+            .map_err(|e| JsValue::from_str(&format!("Invalid binary_files JSON: {e}")))?;
+        for (k, v) in binary_map {
+            let bytes = base64::engine::general_purpose::STANDARD
+                .decode(&v)
+                .map_err(|e| JsValue::from_str(&format!("Base64 decode error for '{k}': {e}")))?;
+            files.insert(k, bytes);
+        }
+    }
 
     let world = WasmWorld::new(typ_source.to_string(), files);
     let result = typst::compile::<typst::layout::PagedDocument>(&world);
