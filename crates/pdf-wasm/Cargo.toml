@@ -1,0 +1,21 @@
+[package]
+name = "omd2typst-pdf-wasm"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "WASM bindings for Typst PDF compilation (on-demand download)"
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[package.metadata.wasm-pack.profile.release]
+wasm-opt = ["-O", "--all-features"]
+
+[dependencies]
+wasm-bindgen = "0.2"
+typst = "0.13"
+typst-pdf = "0.13"
+typst-assets = { version = "0.13", features = ["fonts"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"

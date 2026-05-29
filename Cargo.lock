@@ -1348,7 +1348,7 @@ dependencies = [
 
 [[package]]
 name = "omd2typst"
-version = "0.9.0"
+version = "0.10.0"
 dependencies = [
  "anyhow",
  "clap",
@@ -1364,6 +1364,18 @@ version = "0.5.0"
 dependencies = [
  "comrak",
  "regex",
+]
+
+[[package]]
+name = "omd2typst-pdf-wasm"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "typst",
+ "typst-assets",
+ "typst-pdf",
+ "wasm-bindgen",
 ]
 
 [[package]]

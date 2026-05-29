@@ -1,5 +1,20 @@
 # Release Notes
 
+## v0.10.0 — PDF compiler WASM for on-demand download
+
+**New: `omd2typst-pdf-compiler.wasm` release artifact**
+
+A new `crates/pdf-wasm` crate adds a `render_to_pdf()` WASM export that compiles Typst source directly to PDF bytes, without requiring a system `typst` binary. The compiled WASM (~27 MB) is published as `omd2typst-pdf-compiler.wasm` in this release and is consumed by the Obsidian plugin as a fallback PDF compiler.
+
+- Embedded fonts: Liberation Sans/Serif (4 faces each) + typst-assets (math, serif, monospace)
+- Template files passed in via a JSON map `{ "vault-relative/path.typ": "content" }`
+- `typst_version()` export returns the embedded Typst version string ("0.13.1")
+- No system fonts scanned; no filesystem access at runtime
+
+**No changes to the CLI binary.**
+
+---
+
 ## v0.9.0 — License corrected to AGPL-3.0
 
 License corrected from MIT to AGPL-3.0-only across all manifests and the LICENSE file. No functional changes.
