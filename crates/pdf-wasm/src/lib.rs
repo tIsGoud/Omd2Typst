@@ -1,6 +1,5 @@
 use std::collections::HashMap;
 
-use serde_json;
 use typst::foundations::Bytes;
 use typst::syntax::{FileId, Source, VirtualPath};
 use typst::text::{Font, FontBook, FontFamily, FontList, TextElem};
