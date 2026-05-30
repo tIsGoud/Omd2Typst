@@ -1,5 +1,19 @@
 # Release Notes
 
+## v0.10.2 — Figure list in all templates; examples download
+
+- **Figure list page** added to `purple-template.typ` and `tig-template.typ` — set `figure-list: true` in frontmatter to include a numbered list of figures before the document body
+- **`omd2typst-examples.zip`** added as a release asset — contains `input/` (sample Markdown files for all five languages) and `templates/` (public Typst templates and frontmatter template), giving new users a ready-to-run starting point
+- Clippy fix in `crates/pdf-wasm`: removed bare `use serde_json;` import
+
+---
+
+## v0.10.1 — CLI version bump
+
+Version bump to match release tag. No functional changes.
+
+---
+
 ## v0.10.0 — PDF compiler WASM for on-demand download
 
 **New: `omd2typst-pdf-compiler.wasm` release artifact**
