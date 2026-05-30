@@ -72,6 +72,10 @@ jobs:
         with:
           merge-multiple: true
 
+      - name: Package examples
+        run: |
+          zip -r omd2typst-examples.zip input/ templates/ -x "**/.DS_Store"
+
       - name: Extract release notes
         run: |
           python3 - <<'PYEOF' > notes.md
@@ -104,4 +108,5 @@ jobs:
             omd2typst-linux-x86_64.tar.gz \
             omd2typst-macos-arm64.tar.gz \
             omd2typst-macos-x86_64.tar.gz \
-            omd2typst-windows-x86_64.zip
+            omd2typst-windows-x86_64.zip \
+            omd2typst-examples.zip

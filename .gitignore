@@ -1,5 +1,4 @@
 target/
-output/
 docs/
 api_test
 run.sh

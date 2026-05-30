@@ -607,6 +607,44 @@
     ]
   ]
 
+  // ── List of figures (optional — set figure-list: true in frontmatter) ────
+  if fm.at("figure-list", default: "") == "true" {
+    page(
+      margin: (top: 0pt, bottom: 0pt, left: 0pt, right: 0pt),
+      header: none,
+      footer: none,
+    )[
+      #_sidebar
+      #pad(left: 2.5cm, right: 2.5cm, top: 2.5cm, bottom: 2.5cm)[
+      #text(size: 17pt, weight: "bold", fill: accent)[#_t.figures]
+      #v(0.6em)
+      #context {
+        let figs = query(figure.where(kind: image))
+        if figs.len() > 0 {
+          table(
+            columns: (auto, 1fr, auto),
+            stroke: (_, y) => if y == 0 { none }
+                              else       { (bottom: 0.5pt + rgb("#dddddd")) },
+            fill:   (_, y) => if y == 0 { rgb("#e8f0fa") } else { none },
+            inset: (x: 8pt, y: 6pt),
+            table.header(
+              text(weight: "bold", fill: accent)[#_t.fig_nr],
+              text(weight: "bold", fill: accent)[#_t.fig_desc],
+              text(weight: "bold", fill: accent)[#_t.page],
+            ),
+            ..figs.map(fig => {
+              let num = counter(figure).at(fig.location()).first()
+              let cap = if fig.caption != none { fig.caption.body } else { [] }
+              let pg  = counter(page).at(fig.location()).first()
+              ([#_t.fig_nr #num], cap, [#pg])
+            }).flatten()
+          )
+        }
+      }
+      ]
+    ]
+  }
+
   // ── Document body ────────────────────────────────────────────
   doc
 }
