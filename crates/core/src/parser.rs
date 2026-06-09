@@ -133,7 +133,7 @@ fn parse_yaml_frontmatter(yaml: &str) -> Vec<(String, FrontmatterValue)> {
                 };
                 result.push((key, FrontmatterValue::Raw(raw)));
             }
-        } else if rest == "|" {
+        } else if matches!(rest, "|" | "|-" | "|+") {
             // YAML literal block scalar — collect indented body lines.
             // Indent depth is determined from the first non-empty body line.
             let mut indent: Option<usize> = None;
@@ -713,6 +713,22 @@ mod tests {
         assert_eq!(result.len(), 2, "Both keys should be parsed");
         assert_eq!(result[0].0, "summary");
         assert_eq!(result[1].0, "title");
+    }
+
+    #[test]
+    fn yaml_block_scalar_strip_chomping_indicator() {
+        // Obsidian's YAML editor writes |- (strip chomping) instead of |.
+        // The parser must treat |- identically to |.
+        let yaml = "summary: |-\n  First line\n  Second line\n";
+        let result = parse_yaml_frontmatter(yaml);
+        assert_eq!(result.len(), 1);
+        let (key, val) = &result[0];
+        assert_eq!(key, "summary");
+        if let FrontmatterValue::Multiline(lines) = val {
+            assert_eq!(lines.len(), 2, "Expected 2 lines from |- block scalar");
+        } else {
+            panic!("Expected Multiline variant for |- block scalar, got: {val:?}");
+        }
     }
 
     #[test]

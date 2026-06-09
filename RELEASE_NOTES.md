@@ -1,5 +1,13 @@
 # Release Notes
 
+## v0.10.4 — Accept `|-` and `|+` chomping variants for block scalars
+
+Obsidian's YAML editor automatically writes `|-` (strip chomping) when the
+user saves a `|` block scalar. The parser now accepts `|`, `|-`, and `|+`
+and treats all three identically.
+
+---
+
 ## v0.10.3 — Support YAML `|` block scalar for multi-line frontmatter
 
 Frontmatter fields now accept the YAML literal block scalar syntax (`|`).
