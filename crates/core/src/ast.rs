@@ -55,10 +55,14 @@ pub enum Block {
 ///   or as a content block `[…]` when it contains bold, italic, etc.
 ///
 /// `Raw` — an already-formatted Typst literal (inline arrays `(…)`).
+///
+/// `Multiline` — a YAML `|` block scalar; each inner `Vec<Inline>` is one line.
+/// Always rendered as a Typst content block with `\` line breaks.
 #[derive(Debug)]
 pub enum FrontmatterValue {
     Inlines(Vec<Inline>),
     Raw(String),
+    Multiline(Vec<Vec<Inline>>),
 }
 
 #[derive(Debug)]

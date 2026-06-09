@@ -133,6 +133,49 @@ fn parse_yaml_frontmatter(yaml: &str) -> Vec<(String, FrontmatterValue)> {
                 };
                 result.push((key, FrontmatterValue::Raw(raw)));
             }
+        } else if rest == "|" {
+            // YAML literal block scalar — collect indented body lines.
+            // Indent depth is determined from the first non-empty body line.
+            let mut indent: Option<usize> = None;
+            let mut body: Vec<String> = Vec::new();
+
+            loop {
+                match lines.peek() {
+                    None => break,
+                    Some(raw) => {
+                        let raw: &str = raw;
+                        if raw.trim().is_empty() {
+                            body.push(String::new());
+                            lines.next();
+                        } else {
+                            let line_indent = raw.len() - raw.trim_start().len();
+                            let ind = *indent.get_or_insert(line_indent);
+                            if line_indent >= ind {
+                                body.push(raw[ind..].trim_end().to_string());
+                                lines.next();
+                            } else {
+                                break;
+                            }
+                        }
+                    }
+                }
+            }
+
+            // YAML clip chomping: strip trailing empty lines.
+            while body.last().map_or(false, |s| s.is_empty()) {
+                body.pop();
+            }
+
+            if !body.is_empty() {
+                // Parse each line independently so rich inline formatting
+                // (bold, italic) works per-line. Lines are stored separately;
+                // the renderer joins them with Typst \ line breaks.
+                let lines_parsed: Vec<Vec<Inline>> = body
+                    .iter()
+                    .map(|line| parse_inline_markdown(line))
+                    .collect();
+                result.push((key, FrontmatterValue::Multiline(lines_parsed)));
+            }
         } else {
             result.push((key, yaml_scalar_to_fm_value(rest)));
         }
@@ -618,5 +661,52 @@ mod tests {
     fn no_comments_unchanged() {
         let input = "just normal text\n";
         assert_eq!(strip_obsidian_comments(input), input);
+    }
+
+    #[test]
+    fn yaml_block_scalar_produces_multiline_variant() {
+        let yaml = "summary: |\n  First line\n  Second line\n";
+        let result = parse_yaml_frontmatter(yaml);
+        assert_eq!(result.len(), 1);
+        let (key, val) = &result[0];
+        assert_eq!(key, "summary");
+        assert!(
+            matches!(val, FrontmatterValue::Multiline(_)),
+            "Expected Multiline variant, got: {val:?}"
+        );
+    }
+
+    #[test]
+    fn yaml_block_scalar_line_count() {
+        let yaml = "summary: |\n  First line\n  Second line\n  Third line\n";
+        let result = parse_yaml_frontmatter(yaml);
+        let (_, val) = &result[0];
+        if let FrontmatterValue::Multiline(lines) = val {
+            assert_eq!(lines.len(), 3, "Expected 3 lines, got {}", lines.len());
+        } else {
+            panic!("Expected Multiline, got: {val:?}");
+        }
+    }
+
+    #[test]
+    fn yaml_block_scalar_strips_trailing_blank_lines() {
+        let yaml = "summary: |\n  Only line\n\n\nother: value\n";
+        let result = parse_yaml_frontmatter(yaml);
+        let summary = result.iter().find(|(k, _)| k == "summary")
+            .expect("summary key missing");
+        if let FrontmatterValue::Multiline(lines) = &summary.1 {
+            assert_eq!(lines.len(), 1, "Trailing blank lines must be stripped");
+        } else {
+            panic!("Expected Multiline, got: {:?}", summary.1);
+        }
+    }
+
+    #[test]
+    fn yaml_block_scalar_stops_at_next_key() {
+        let yaml = "summary: |\n  Body line\ntitle: My Title\n";
+        let result = parse_yaml_frontmatter(yaml);
+        assert_eq!(result.len(), 2, "Both keys should be parsed");
+        assert_eq!(result[0].0, "summary");
+        assert_eq!(result[1].0, "title");
     }
 }

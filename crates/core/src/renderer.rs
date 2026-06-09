@@ -707,6 +707,16 @@ fn render_fm_value(value: &FrontmatterValue) -> String {
                 format!("[{}]", content)
             }
         }
+        FrontmatterValue::Multiline(lines) => {
+            let mut content = String::new();
+            for (i, line_inlines) in lines.iter().enumerate() {
+                if i > 0 {
+                    content.push_str("\\\n");
+                }
+                render_inlines(&mut content, line_inlines);
+            }
+            format!("[{}]", content)
+        }
     }
 }
 
@@ -727,6 +737,11 @@ fn fm_plain_text(value: &FrontmatterValue) -> String {
             }
         }
         FrontmatterValue::Inlines(inlines) => inlines_to_plain_text(inlines),
+        FrontmatterValue::Multiline(lines) => lines
+            .iter()
+            .map(|line| inlines_to_plain_text(line))
+            .collect::<Vec<_>>()
+            .join(" "),
     }
 }
 
@@ -816,6 +831,19 @@ mod tests {
         assert!(
             out.contains("#callout(\"foobar\", \"Unknown\")["),
             "Expected bare title for unknown kind:\n{out}"
+        );
+    }
+
+    #[test]
+    fn frontmatter_block_scalar_renders_as_content_block() {
+        // YAML | block scalar must produce a Typst content block with \ line
+        // breaks, not a flat string with the lines joined by spaces.
+        let md = "---\nsummary: |\n  First line\n  Second line\n---\n\n# Body\n";
+        let doc = parse_markdown(md);
+        let out = render_typst(&doc, None, &RenderOptions::default());
+        assert!(
+            out.contains("#let summary = [First line\\\nSecond line]"),
+            "Expected content block with Typst line break:\n{out}"
         );
     }
 }
