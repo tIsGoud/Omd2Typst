@@ -4,7 +4,7 @@
 
 **Goal:** Support YAML `|` literal block scalars in frontmatter so that multi-line summary text renders as separate lines in the PDF cover page.
 
-**Architecture:** Two targeted fixes in `omd2typst-core`. (1) The parser's `parse_yaml_frontmatter` gains a branch that collects indented body lines when it sees `|`, joins them with Markdown hard-break syntax so `comrak` produces `HardBreak` inlines. (2) The renderer's `is_plain_inlines` stops treating `HardBreak` as plain text, routing multi-line values through the content-block path which already emits correct Typst line-break syntax (`\` + newline). The plugin then rebuilds its WASM bundle from the updated submodule.
+**Architecture:** Add a dedicated `Multiline(Vec<Vec<Inline>>)` variant to `FrontmatterValue` in `ast.rs`. The parser detects `|`, collects indented body lines, parses each line independently with `parse_inline_markdown`, and stores the result as `Multiline`. The renderer adds a match arm for `Multiline` in `render_fm_value` that always emits a Typst content block with `\` line breaks — no existing behaviour is changed. `is_plain_inlines` is not touched. The plugin then rebuilds its WASM bundle from the updated submodule.
 
 **Tech Stack:** Rust, comrak (Markdown parser), wasm-pack, Node.js/TypeScript (plugin)
 
@@ -14,42 +14,181 @@
 
 | Action | Path | Purpose |
 |--------|------|---------|
-| Modify | `crates/core/src/parser.rs` | Add `|` block scalar handler in `parse_yaml_frontmatter` |
-| Modify | `crates/core/src/renderer.rs` | Remove `HardBreak` from `is_plain_inlines` |
+| Modify | `crates/core/src/ast.rs` | Add `Multiline(Vec<Vec<Inline>>)` variant to `FrontmatterValue` |
+| Modify | `crates/core/src/parser.rs` | Add `\|` block scalar handler producing `Multiline` |
+| Modify | `crates/core/src/renderer.rs` | Add `Multiline` match arms in `render_fm_value` and `fm_plain_text` |
 | Modify | `crates/core/Cargo.toml` | Bump `omd2typst-core` version `0.5.0` → `0.5.1` |
 | Modify | `crates/wasm/Cargo.toml` | Bump `omd2typst-wasm` version `0.5.0` → `0.5.1` |
 | Modify | `crates/cli/Cargo.toml` | Bump CLI version `0.10.2` → `0.10.3` |
 | Modify | `obsidian-omd2typst/libs/omd2typst` | Update submodule pointer to new commit |
-| Modify | `obsidian-omd2typst/src/wasm/omd2typst-pkg/` | Rebuilt by `npm run build:wasm` (do not edit by hand) |
+| Replaced by build | `obsidian-omd2typst/src/wasm/omd2typst-pkg/` | Rebuilt by `npm run build:wasm` — do not edit by hand |
 
 ---
 
-## Task 1: Write failing tests
+## Task 1: Add `Multiline` variant to `FrontmatterValue`
 
 **Files:**
-- Modify: `crates/core/src/parser.rs` (add to `mod tests` at line 592)
-- Modify: `crates/core/src/renderer.rs` (add to `mod tests` at line 767)
+- Modify: `crates/core/src/ast.rs` lines 55–62
+- Modify: `crates/core/src/renderer.rs` — `render_fm_value` (line 698) and `fm_plain_text` (line 720)
 
-- [ ] **Step 1: Add failing parser unit tests to `crates/core/src/parser.rs`**
+Adding the variant before writing tests lets the code compile so failing tests can run (rather than fail to build).
 
-  Append inside the existing `mod tests { ... }` block (before the closing `}`):
+- [ ] **Step 1: Add `Multiline` to the enum in `crates/core/src/ast.rs`**
+
+  Replace:
+  ```rust
+  /// `Raw` — an already-formatted Typst literal (inline arrays `(…)`).
+  #[derive(Debug)]
+  pub enum FrontmatterValue {
+      Inlines(Vec<Inline>),
+      Raw(String),
+  }
+  ```
+
+  With:
+  ```rust
+  /// `Raw` — an already-formatted Typst literal (inline arrays `(…)`).
+  ///
+  /// `Multiline` — a YAML `|` block scalar; each inner `Vec<Inline>` is one line.
+  /// Always rendered as a Typst content block with `\` line breaks.
+  #[derive(Debug)]
+  pub enum FrontmatterValue {
+      Inlines(Vec<Inline>),
+      Raw(String),
+      Multiline(Vec<Vec<Inline>>),
+  }
+  ```
+
+- [ ] **Step 2: Add `Multiline` match arm to `render_fm_value` in `crates/core/src/renderer.rs`**
+
+  Replace:
+  ```rust
+  fn render_fm_value(value: &FrontmatterValue) -> String {
+      match value {
+          FrontmatterValue::Raw(s) => s.clone(),
+          FrontmatterValue::Inlines(inlines) => {
+              if is_plain_inlines(inlines) {
+                  typst_string_val(&inlines_to_plain_text(inlines))
+              } else {
+                  let mut content = String::new();
+                  render_inlines(&mut content, inlines);
+                  format!("[{}]", content)
+              }
+          }
+      }
+  }
+  ```
+
+  With:
+  ```rust
+  fn render_fm_value(value: &FrontmatterValue) -> String {
+      match value {
+          FrontmatterValue::Raw(s) => s.clone(),
+          FrontmatterValue::Inlines(inlines) => {
+              if is_plain_inlines(inlines) {
+                  typst_string_val(&inlines_to_plain_text(inlines))
+              } else {
+                  let mut content = String::new();
+                  render_inlines(&mut content, inlines);
+                  format!("[{}]", content)
+              }
+          }
+          FrontmatterValue::Multiline(lines) => {
+              let mut content = String::new();
+              for (i, line_inlines) in lines.iter().enumerate() {
+                  if i > 0 {
+                      content.push_str("\\\n");
+                  }
+                  render_inlines(&mut content, line_inlines);
+              }
+              format!("[{}]", content)
+          }
+      }
+  }
+  ```
+
+- [ ] **Step 3: Add `Multiline` match arm to `fm_plain_text` in `crates/core/src/renderer.rs`**
+
+  Replace:
+  ```rust
+  fn fm_plain_text(value: &FrontmatterValue) -> String {
+      match value {
+          FrontmatterValue::Raw(s) => {
+              if s.len() >= 2 && s.starts_with('"') && s.ends_with('"') {
+                  s[1..s.len() - 1].to_string()
+              } else {
+                  s.clone()
+              }
+          }
+          FrontmatterValue::Inlines(inlines) => inlines_to_plain_text(inlines),
+      }
+  }
+  ```
+
+  With:
+  ```rust
+  fn fm_plain_text(value: &FrontmatterValue) -> String {
+      match value {
+          FrontmatterValue::Raw(s) => {
+              if s.len() >= 2 && s.starts_with('"') && s.ends_with('"') {
+                  s[1..s.len() - 1].to_string()
+              } else {
+                  s.clone()
+              }
+          }
+          FrontmatterValue::Inlines(inlines) => inlines_to_plain_text(inlines),
+          FrontmatterValue::Multiline(lines) => lines
+              .iter()
+              .map(|line| inlines_to_plain_text(line))
+              .collect::<Vec<_>>()
+              .join(" "),
+      }
+  }
+  ```
+
+- [ ] **Step 4: Verify the crate still compiles with no new tests yet**
+
+  ```bash
+  cargo build --package omd2typst-core 2>&1 | grep -E "error|warning: unused"
+  ```
+
+  Expected: no errors. (Unused variant warning is acceptable at this point.)
+
+---
+
+## Task 2: Write failing tests
+
+**Files:**
+- Modify: `crates/core/src/parser.rs` — append to `mod tests` block (line 592)
+- Modify: `crates/core/src/renderer.rs` — append to `mod tests` block (line 767)
+
+- [ ] **Step 1: Add parser unit tests to `crates/core/src/parser.rs`**
+
+  Append inside the existing `mod tests { ... }` block before the closing `}`:
 
   ```rust
   #[test]
-  fn yaml_block_scalar_produces_hard_breaks() {
+  fn yaml_block_scalar_produces_multiline_variant() {
       let yaml = "summary: |\n  First line\n  Second line\n";
       let result = parse_yaml_frontmatter(yaml);
       assert_eq!(result.len(), 1);
       let (key, val) = &result[0];
       assert_eq!(key, "summary");
-      match val {
-          FrontmatterValue::Inlines(inlines) => {
-              assert!(
-                  inlines.iter().any(|i| matches!(i, Inline::HardBreak)),
-                  "Expected HardBreak between lines, got: {inlines:?}"
-              );
-          }
-          other => panic!("Expected Inlines variant, got: {other:?}"),
+      assert!(
+          matches!(val, FrontmatterValue::Multiline(_)),
+          "Expected Multiline variant, got: {val:?}"
+      );
+  }
+
+  #[test]
+  fn yaml_block_scalar_line_count() {
+      let yaml = "summary: |\n  First line\n  Second line\n  Third line\n";
+      let result = parse_yaml_frontmatter(yaml);
+      let (_, val) = &result[0];
+      if let FrontmatterValue::Multiline(lines) = val {
+          assert_eq!(lines.len(), 3, "Expected 3 lines, got {}", lines.len());
+      } else {
+          panic!("Expected Multiline, got: {val:?}");
       }
   }
 
@@ -59,14 +198,10 @@
       let result = parse_yaml_frontmatter(yaml);
       let summary = result.iter().find(|(k, _)| k == "summary")
           .expect("summary key missing");
-      match &summary.1 {
-          FrontmatterValue::Inlines(inlines) => {
-              assert!(
-                  !matches!(inlines.last(), Some(Inline::HardBreak)),
-                  "Trailing HardBreak should be stripped by clip chomping"
-              );
-          }
-          other => panic!("Expected Inlines, got: {other:?}"),
+      if let FrontmatterValue::Multiline(lines) = &summary.1 {
+          assert_eq!(lines.len(), 1, "Trailing blank lines must be stripped");
+      } else {
+          panic!("Expected Multiline, got: {:?}", summary.1);
       }
   }
 
@@ -80,15 +215,15 @@
   }
   ```
 
-- [ ] **Step 2: Add failing integration test to `crates/core/src/renderer.rs`**
+- [ ] **Step 2: Add integration test to `crates/core/src/renderer.rs`**
 
-  Append inside the existing `mod tests { ... }` block (before the closing `}`):
+  Append inside the existing `mod tests { ... }` block before the closing `}`:
 
   ```rust
   #[test]
   fn frontmatter_block_scalar_renders_as_content_block() {
-      // A YAML | block scalar summary must produce a Typst content block
-      // with \ line breaks, not a flat string with spaces.
+      // YAML | block scalar must produce a Typst content block with \ line
+      // breaks, not a flat string with the lines joined by spaces.
       let md = "---\nsummary: |\n  First line\n  Second line\n---\n\n# Body\n";
       let doc = parse_markdown(md);
       let out = render_typst(&doc, None, &RenderOptions::default());
@@ -102,24 +237,24 @@
 - [ ] **Step 3: Run tests — confirm the new tests fail**
 
   ```bash
-  cargo test --package omd2typst-core 2>&1 | grep -E "FAILED|ok|error"
+  cargo test --package omd2typst-core 2>&1 | grep -E "FAILED|ok|test result"
   ```
 
-  Expected: `yaml_block_scalar_produces_hard_breaks` FAILED, `yaml_block_scalar_strips_trailing_blank_lines` FAILED, `yaml_block_scalar_stops_at_next_key` FAILED, `frontmatter_block_scalar_renders_as_content_block` FAILED. Existing 8 tests still pass.
+  Expected: 5 new tests FAILED, existing 8 tests still pass.
 
 ---
 
-## Task 2: Implement the parser fix
+## Task 3: Implement the parser fix
 
 **Files:**
 - Modify: `crates/core/src/parser.rs` — `parse_yaml_frontmatter` function (lines 101–143)
 
 - [ ] **Step 1: Add the `|` block scalar branch in `parse_yaml_frontmatter`**
 
-  In `parse_yaml_frontmatter`, replace the final `else` branch:
+  Replace the final `else` branch (currently `} else { result.push(...) }`):
 
   ```rust
-  // Before (lines ~136–138):
+  // Before:
   } else {
       result.push((key, yaml_scalar_to_fm_value(rest)));
   }
@@ -130,7 +265,7 @@
   ```rust
   } else if rest == "|" {
       // YAML literal block scalar — collect indented body lines.
-      // Indent is determined from the first non-empty body line.
+      // Indent depth is determined from the first non-empty body line.
       let mut indent: Option<usize> = None;
       let mut body: Vec<String> = Vec::new();
 
@@ -162,72 +297,61 @@
       }
 
       if !body.is_empty() {
-          // Join with Markdown hard-break syntax (two trailing spaces + newline)
-          // so comrak emits HardBreak inlines, which render_fm_value routes to
-          // a Typst content block instead of a plain string.
-          let text = body.join("  \n");
-          result.push((key, FrontmatterValue::Inlines(parse_inline_markdown(&text))));
+          // Parse each line independently so rich inline formatting
+          // (bold, italic) works per-line. Lines are stored separately;
+          // the renderer joins them with Typst \ line breaks.
+          let lines_parsed: Vec<Vec<Inline>> = body
+              .iter()
+              .map(|line| parse_inline_markdown(line))
+              .collect();
+          result.push((key, FrontmatterValue::Multiline(lines_parsed)));
       }
   } else {
       result.push((key, yaml_scalar_to_fm_value(rest)));
   }
   ```
 
-- [ ] **Step 2: Run the parser tests — confirm they pass**
+- [ ] **Step 2: Run parser tests — confirm they pass**
 
   ```bash
   cargo test --package omd2typst-core parser 2>&1 | grep -E "FAILED|ok"
   ```
 
-  Expected: all four parser tests pass (`strip_inline_comment`, `strip_block_comment`, `comment_preserved_in_code_block`, `no_comments_unchanged`, `yaml_block_scalar_produces_hard_breaks`, `yaml_block_scalar_strips_trailing_blank_lines`, `yaml_block_scalar_stops_at_next_key`).
+  Expected: all 4 new parser tests pass alongside the existing 4.
 
-- [ ] **Step 3: Confirm integration test still fails (renderer not yet fixed)**
+- [ ] **Step 3: Confirm integration test still fails (renderer match not yet added — wait, it was added in Task 1)**
+
+  The renderer match arm was added in Task 1, so the integration test should already pass. Run it:
 
   ```bash
   cargo test --package omd2typst-core frontmatter_block_scalar 2>&1
   ```
 
-  Expected: FAILED — the output will contain `#let summary = "First line Second line"` (flat string, HardBreak still considered plain).
+  Expected: PASS.
 
----
-
-## Task 3: Implement the renderer fix
-
-**Files:**
-- Modify: `crates/core/src/renderer.rs` — `is_plain_inlines` function (line 716)
-
-- [ ] **Step 1: Remove `HardBreak` from `is_plain_inlines`**
-
-  ```rust
-  // Before:
-  fn is_plain_inlines(inlines: &[Inline]) -> bool {
-      inlines.iter().all(|i| matches!(i, Inline::Text(_) | Inline::SoftBreak | Inline::HardBreak))
-  }
-
-  // After:
-  fn is_plain_inlines(inlines: &[Inline]) -> bool {
-      inlines.iter().all(|i| matches!(i, Inline::Text(_) | Inline::SoftBreak))
-  }
-  ```
-
-- [ ] **Step 2: Run all tests — confirm everything passes**
+- [ ] **Step 4: Run full test suite — all 13 tests pass**
 
   ```bash
-  cargo test --package omd2typst-core 2>&1 | grep -E "FAILED|ok|test result"
+  cargo test --package omd2typst-core 2>&1 | grep "test result"
   ```
 
-  Expected: `test result: ok. 12 passed; 0 failed`
+  Expected: `test result: ok. 13 passed; 0 failed`
 
-- [ ] **Step 3: Commit**
+- [ ] **Step 5: Commit**
 
   ```bash
-  git -C /Users/albert/Projects/Omd2Typst@Github/omd2typst add crates/core/src/parser.rs crates/core/src/renderer.rs
-  git -C /Users/albert/Projects/Omd2Typst@Github/omd2typst commit -m "feat: support YAML | block scalar for multi-line frontmatter values
+  git -C /Users/albert/Projects/Omd2Typst@Github/omd2typst add \
+      crates/core/src/ast.rs \
+      crates/core/src/parser.rs \
+      crates/core/src/renderer.rs
+  git -C /Users/albert/Projects/Omd2Typst@Github/omd2typst commit -m \
+      "feat: support YAML | block scalar for multi-line frontmatter values
 
-  Parser: detect | indicator, collect indented body lines, join with
-  Markdown hard-break syntax so comrak produces HardBreak inlines.
-  Renderer: exclude HardBreak from is_plain_inlines so multi-line values
-  render as Typst content blocks instead of flat strings."
+  Add Multiline(Vec<Vec<Inline>>) variant to FrontmatterValue so block
+  scalars are represented explicitly rather than overloading HardBreak.
+  Parser collects indented body lines, parses each independently.
+  Renderer emits a Typst content block with backslash line breaks.
+  is_plain_inlines and all string-comparison paths are unchanged."
   ```
 
 ---
@@ -238,8 +362,9 @@
 - Modify: `crates/core/Cargo.toml` — version `0.5.0` → `0.5.1`
 - Modify: `crates/wasm/Cargo.toml` — version `0.5.0` → `0.5.1`
 - Modify: `crates/cli/Cargo.toml` — version `0.10.2` → `0.10.3`
+- Modify: `RELEASE_NOTES.md`
 
-- [ ] **Step 1: Add release notes to `RELEASE_NOTES.md` in the omd2typst repo**
+- [ ] **Step 1: Add release notes to `RELEASE_NOTES.md`**
 
   Prepend after the `# Release Notes` heading:
 
@@ -253,19 +378,19 @@
   ---
   ```
 
-- [ ] **Step 2: Bump versions in all three crates**
+- [ ] **Step 2: Bump versions**
 
-  In `crates/core/Cargo.toml`:
+  In `crates/core/Cargo.toml`, change:
   ```toml
   version = "0.5.1"
   ```
 
-  In `crates/wasm/Cargo.toml`:
+  In `crates/wasm/Cargo.toml`, change:
   ```toml
   version = "0.5.1"
   ```
 
-  In `crates/cli/Cargo.toml`:
+  In `crates/cli/Cargo.toml`, change:
   ```toml
   version = "0.10.3"
   ```
@@ -276,15 +401,19 @@
   cd /Users/albert/Projects/Omd2Typst@Github/omd2typst && cargo test --package omd2typst-core 2>&1 | grep "test result"
   ```
 
-  Expected: `test result: ok. 12 passed; 0 failed`
+  Expected: `test result: ok. 13 passed; 0 failed`
 
-- [ ] **Step 4: Commit and tag**
+- [ ] **Step 4: Commit, tag, and push**
 
   ```bash
-  git -C /Users/albert/Projects/Omd2Typst@Github/omd2typst add crates/core/Cargo.toml crates/wasm/Cargo.toml crates/cli/Cargo.toml Cargo.lock
-  git -C /Users/albert/Projects/Omd2Typst@Github/omd2typst commit -m "chore: bump versions to 0.10.3 / core 0.5.1 / wasm 0.5.1"
+  git -C /Users/albert/Projects/Omd2Typst@Github/omd2typst add \
+      crates/core/Cargo.toml crates/wasm/Cargo.toml crates/cli/Cargo.toml \
+      Cargo.lock RELEASE_NOTES.md
+  git -C /Users/albert/Projects/Omd2Typst@Github/omd2typst commit -m \
+      "chore: bump versions to 0.10.3 / core 0.5.1 / wasm 0.5.1"
   git -C /Users/albert/Projects/Omd2Typst@Github/omd2typst tag v0.10.3
-  git -C /Users/albert/Projects/Omd2Typst@Github/omd2typst push && git -C /Users/albert/Projects/Omd2Typst@Github/omd2typst push --tags
+  git -C /Users/albert/Projects/Omd2Typst@Github/omd2typst push && \
+      git -C /Users/albert/Projects/Omd2Typst@Github/omd2typst push --tags
   ```
 
 ---
@@ -304,15 +433,17 @@
   cd /Users/albert/Projects/Omd2Typst@Github/obsidian-omd2typst/libs/omd2typst && git pull origin main
   ```
 
-  Verify it points to the `v0.10.3` commit:
+  Verify it is on the `v0.10.3` commit:
   ```bash
   git -C /Users/albert/Projects/Omd2Typst@Github/obsidian-omd2typst/libs/omd2typst log --oneline -1
   ```
 
+  Expected: the commit message contains `chore: bump versions to 0.10.3`.
+
 - [ ] **Step 2: Rebuild the WASM bundle**
 
   ```bash
-  cd /Users/albert/Projects/Omd2Typst@Github/obsidian-omd2typst && npm run build:wasm 2>&1 | tail -5
+  cd /Users/albert/Projects/Omd2Typst@Github/obsidian-omd2typst && npm run build:wasm 2>&1 | tail -3
   ```
 
   Expected: `✓ omd2typst WASM written to .../src/wasm/omd2typst-pkg`
@@ -328,7 +459,7 @@
 - [ ] **Step 4: Run lint and tests**
 
   ```bash
-  cd /Users/albert/Projects/Omd2Typst@Github/obsidian-omd2typst && npm run lint && npm test 2>&1 | tail -10
+  cd /Users/albert/Projects/Omd2Typst@Github/obsidian-omd2typst && npm run lint && npm test 2>&1 | tail -5
   ```
 
   Expected: lint clean, `27 passed`.
@@ -345,9 +476,9 @@
   "version": "0.8.12"
   ```
 
-- [ ] **Step 6: Add release notes**
+- [ ] **Step 6: Add release notes to `obsidian-omd2typst/RELEASE_NOTES.md`**
 
-  Prepend to `RELEASE_NOTES.md` after the `# Release Notes` heading:
+  Prepend after the `# Release Notes` heading:
 
   ```markdown
   ## v0.8.12 — Support multi-line summary on cover page
@@ -371,7 +502,8 @@
 
   ```bash
   cd /Users/albert/Projects/Omd2Typst@Github/obsidian-omd2typst
-  git add libs/omd2typst src/wasm/omd2typst-pkg manifest.json package.json package-lock.json RELEASE_NOTES.md
+  git add libs/omd2typst src/wasm/omd2typst-pkg manifest.json \
+      package.json package-lock.json RELEASE_NOTES.md
   git commit -m "v0.8.12 — support multi-line summary via YAML block scalar"
   git tag 0.8.12
   git push && git push --tags
