@@ -1,5 +1,12 @@
 # Release Notes
 
+## v0.10.5 — Fix clippy lint in block scalar parser
+
+`map_or(false, …)` replaced with `is_some_and(…)` in the YAML block scalar
+chomping loop — flagged by `clippy::unnecessary_map_or` with `-D warnings`.
+
+---
+
 ## v0.10.4 — Accept `|-` and `|+` chomping variants for block scalars
 
 Obsidian's YAML editor automatically writes `|-` (strip chomping) when the

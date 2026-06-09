@@ -167,7 +167,7 @@ fn parse_yaml_frontmatter(yaml: &str) -> Vec<(String, FrontmatterValue)> {
             }
 
             // YAML clip chomping: strip trailing empty lines.
-            while body.last().map_or(false, |s| s.is_empty()) {
+            while body.last().is_some_and(|s| s.is_empty()) {
                 body.pop();
             }
 
