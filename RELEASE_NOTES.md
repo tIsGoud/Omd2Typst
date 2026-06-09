@@ -1,5 +1,13 @@
 # Release Notes
 
+## v0.10.3 — Support YAML `|` block scalar for multi-line frontmatter
+
+Frontmatter fields now accept the YAML literal block scalar syntax (`|`).
+Multi-line values — most usefully `summary` — render as separate lines in
+the PDF output instead of being collapsed to a flat string.
+
+---
+
 ## v0.10.2 — Figure list in all templates; examples download
 
 - **Figure list page** added to `purple-template.typ` and `tig-template.typ` — set `figure-list: true` in frontmatter to include a numbered list of figures before the document body
