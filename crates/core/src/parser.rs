@@ -149,6 +149,11 @@ fn parse_yaml_frontmatter(yaml: &str) -> Vec<(String, FrontmatterValue)> {
                             lines.next();
                         } else {
                             let line_indent = raw.len() - raw.trim_start().len();
+                            // If indent not yet set and this line is at column 0, it is
+                            // the next YAML key — not part of the block body. Stop.
+                            if indent.is_none() && line_indent == 0 {
+                                break;
+                            }
                             let ind = *indent.get_or_insert(line_indent);
                             if line_indent >= ind {
                                 body.push(raw[ind..].trim_end().to_string());
@@ -708,5 +713,20 @@ mod tests {
         assert_eq!(result.len(), 2, "Both keys should be parsed");
         assert_eq!(result[0].0, "summary");
         assert_eq!(result[1].0, "title");
+    }
+
+    #[test]
+    fn yaml_block_scalar_empty_body_does_not_eat_next_key() {
+        // A | scalar with no indented body must not consume the next key.
+        let yaml = "summary: |\ntitle: My Title\n";
+        let result = parse_yaml_frontmatter(yaml);
+        // summary produces nothing (empty body → not pushed), title is parsed
+        let title = result.iter().find(|(k, _)| k == "title")
+            .expect("title key must be parsed");
+        assert_eq!(
+            matches!(&title.1, FrontmatterValue::Inlines(_)),
+            true,
+            "title must be an Inlines value, not consumed by summary"
+        );
     }
 }
