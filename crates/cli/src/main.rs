@@ -9,6 +9,7 @@ use std::fs;
 #[derive(Parser)]
 #[command(
     name = "omd2typst",
+    version,
     about = "Convert Obsidian Markdown to a Typst file or PDF",
     after_help = "EXAMPLES:
     omd2typst notes.md output.typ

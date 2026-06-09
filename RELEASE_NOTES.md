@@ -1,5 +1,11 @@
 # Release Notes
 
+## v0.10.6 — Add `--version` / `-V` flag to CLI
+
+`omd2typst --version` and `omd2typst -V` now print the version string.
+
+---
+
 ## v0.10.5 — Fix clippy lint in block scalar parser
 
 `map_or(false, …)` replaced with `is_some_and(…)` in the YAML block scalar
