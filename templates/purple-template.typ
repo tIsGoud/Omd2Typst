@@ -503,6 +503,9 @@
     it.body,
   )
 
+  // ── Figure spacing ───────────────────────────────────────────
+  show figure: set block(below: 1.5em)
+
   // ── Cover page ───────────────────────────────────────────────
   page(
     margin: (top: 0pt, bottom: 0pt, left: 0pt, right: 0pt),
