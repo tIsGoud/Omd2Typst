@@ -434,7 +434,7 @@
   set heading(numbering: "1.1.")
 
   show heading.where(level: 1): it => {
-    v(1.4em)
+    pagebreak(weak: true)   // each chapter starts on a new page
     text(size: 17pt, weight: "bold", fill: accent, it)
     v(0.5em)
   }

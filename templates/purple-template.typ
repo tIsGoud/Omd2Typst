@@ -332,6 +332,7 @@
 #let _lang_strings = (
   "nl": (
     toc:      "Inhoudsopgave",
+    appendix: "Bijlage",
     figures:  "Lijst van figuren",
     summary:  "Samenvatting",
     version:  "Versie",
@@ -345,6 +346,7 @@
   ),
   "en": (
     toc:      "Table of Contents",
+    appendix: "Appendix",
     figures:  "List of Figures",
     summary:  "Summary",
     version:  "Version",
@@ -358,6 +360,7 @@
   ),
   "de": (
     toc:      "Inhaltsverzeichnis",
+    appendix: "Anhang",
     figures:  "Abbildungsverzeichnis",
     summary:  "Zusammenfassung",
     version:  "Version",
@@ -371,6 +374,7 @@
   ),
   "es": (
     toc:      "Tabla de contenidos",
+    appendix: "Apéndice",
     figures:  "Lista de figuras",
     summary:  "Resumen",
     version:  "Versión",
@@ -384,6 +388,7 @@
   ),
   "fr": (
     toc:      "Table des matières",
+    appendix: "Appendice",
     figures:  "Liste des figures",
     summary:  "Résumé",
     version:  "Version",
@@ -420,6 +425,10 @@
   let summary  = fm.at("summary",  default: "")
   let _lang    = fm.at("language", default: "nl")
   let _t       = _lang_strings.at(_lang, default: _lang_strings.at("nl"))
+
+  // Register the localized "Appendix" label so the engine’s appendix numbering
+  // switch (emitted at `appendix-from`) renders e.g. "Bijlage A - …".
+  state("omd-appendix-label").update(_t.at("appendix", default: "Appendix"))
 
   // ── Page layout ─────────────────────────────────────────────
   set page(
@@ -459,7 +468,7 @@
   set heading(numbering: "1.1.")
 
   show heading.where(level: 1): it => {
-    v(1.4em)
+    pagebreak(weak: true)   // each chapter starts on a new page
     text(size: 17pt, weight: "bold", fill: accent, it)
     v(0.5em)
   }
