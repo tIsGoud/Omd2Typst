@@ -1,5 +1,47 @@
 # Release Notes
 
+## v0.11.0 — Appendix headings, table layout & embed handling
+
+**Appendix headings.** A new `appendix-from` frontmatter key names the first
+appendix chapter; that chapter and every top-level chapter after it render as
+`Appendix A - <title>` with letter-prefixed sub-numbering (`A.1`, `A.1.1`).
+The prefix is localized — `Appendix` (en), `Bijlage` (nl), `Anhang` (de),
+`Apéndice` (es), `Appendice` (fr). Appendix-aware public templates:
+`tig-template.typ` and `purple-template.typ`. Templates that do not opt in — and
+the built-in template — silently ignore `appendix-from` (no compile error). The
+CLI prints a stderr warning when `appendix-from` names no top-level chapter.
+
+**Non-image embeds no longer break PDF generation.** Embeds that are not
+renderable images — Obsidian Bases (`.base`), PDFs, note transclusions,
+audio/video — previously failed Typst compilation with `unknown image format`.
+They now render a visible placeholder note, and the CLI prints a stderr warning,
+so the PDF is still produced. (These embeds are fully rendered only by the
+Obsidian plugin.)
+
+**Wikilink filenames with spaces now resolve.** `![[Some Note.md]]` and image
+embeds whose path contains spaces or parentheses are angle-bracketed before
+parsing, so they are recognized instead of degrading to literal text.
+
+**Table layout.** Table cells are no longer justified — they render ragged-left —
+and hyphenation is enabled inside tables so a long unbreakable word wraps within
+its column instead of overflowing into the neighbouring one.
+
+**Chapters start on a new page.** In `tig-template.typ` and
+`purple-template.typ`, each top-level chapter (including appendices) begins on a
+fresh page.
+
+**Versioning.** All workspace crates unified at `0.11.0` (cli, core, wasm,
+pdf-wasm, web).
+
+---
+
+## v0.10.7 — Figure spacing
+
+Figures now set `show figure: set block(below: 1.5em)` for consistent spacing
+below each figure/caption.
+
+---
+
 ## v0.10.6 — Add `--version` / `-V` flag to CLI
 
 `omd2typst --version` and `omd2typst -V` now print the version string.
