@@ -1367,19 +1367,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "omd2typst-pdf-wasm"
-version = "0.11.0"
-dependencies = [
- "base64",
- "serde",
- "serde_json",
- "typst",
- "typst-assets",
- "typst-pdf",
- "wasm-bindgen",
-]
-
-[[package]]
 name = "omd2typst-wasm"
 version = "0.11.0"
 dependencies = [

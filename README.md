@@ -439,8 +439,6 @@ crates/
     src/main.rs     — CLI (clap), file I/O, typst invocation
   wasm/         — omd2typst-wasm (cdylib) — WASM bindings for the Obsidian plugin
     src/lib.rs      — render_to_typst, get_builtin_template via wasm-bindgen
-  pdf-wasm/     — omd2typst-pdf-wasm (cdylib) — standalone Typst→PDF WASM compiler
-    src/lib.rs      — render_to_pdf, typst_version via wasm-bindgen
   web/          — omd2typst-web (stub, specced separately)
     src/main.rs     — todo!()
 ```
