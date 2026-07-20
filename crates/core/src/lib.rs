@@ -7,7 +7,9 @@ pub use ast::{
     Inline, ListItem, TableRow,
 };
 pub use parser::parse_markdown;
-pub use renderer::{render_typst, BUILTIN_TEMPLATE};
+pub use renderer::{
+    appendix_unmatched, collect_unsupported_embeds, render_typst, BUILTIN_TEMPLATE,
+};
 
 /// Rendering options — currently empty, extended as consumers reveal needs.
 /// Present now so the render_typst() signature is stable when options arrive.

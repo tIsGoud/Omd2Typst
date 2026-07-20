@@ -460,17 +460,17 @@
 
   show heading.where(level: 1): it => {
     v(1.4em)
-    text(size: 17pt, weight: "bold", fill: accent, it.body)
+    text(size: 17pt, weight: "bold", fill: accent, it)
     v(0.5em)
   }
   show heading.where(level: 2): it => {
     v(1.0em)
-    text(size: 13pt, weight: "bold", fill: accent, it.body)
+    text(size: 13pt, weight: "bold", fill: accent, it)
     v(0.3em)
   }
   show heading.where(level: 3): it => {
     v(0.8em)
-    text(size: 11pt, weight: "bold", fill: rgb("#333333"), it.body)
+    text(size: 11pt, weight: "bold", fill: rgb("#333333"), it)
     v(0.2em)
   }
 

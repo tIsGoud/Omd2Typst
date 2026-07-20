@@ -501,8 +501,10 @@ pub fn collect_inline_text(inlines: &[Inline]) -> String {
 }
 
 /// Convert Obsidian wikilink image syntax to standard Markdown.
-///   ![[path|150]]  →  ![|150](path)
-///   ![[path]]      →  ![](path)
+///   ![[path|150]]  →  ![|150](<path>)
+///   ![[path]]      →  ![](<path>)
+/// The destination is angle-bracket wrapped so paths containing spaces or
+/// parentheses (e.g. `![[Some Note.md]]`) still parse as a single URL.
 static OBSIDIAN_IMAGE_RE: OnceLock<Regex> = OnceLock::new();
 static FENCE_RE: OnceLock<Regex> = OnceLock::new();
 
@@ -559,10 +561,12 @@ fn preprocess_obsidian_images(input: &str) -> String {
             let replaced = re.replace_all(line, |caps: &regex::Captures| {
                 let path  = &caps[1];
                 let width = caps.get(2).map(|m| m.as_str()).unwrap_or("");
+                // Angle-bracket the destination so spaces / parens in the path
+                // don't terminate the URL (CommonMark `<...>` destination).
                 if width.is_empty() {
-                    format!("![]({})", path)
+                    format!("![](<{}>)", path)
                 } else {
-                    format!("![|{}]({})", width, path)
+                    format!("![|{}](<{}>)", width, path)
                 }
             });
             out.push_str(&replaced);

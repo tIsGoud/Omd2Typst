@@ -26,6 +26,14 @@ pub fn render_typst(doc: &Document, template: Option<&str>, _options: &RenderOpt
         None
     };
 
+    // Appendix numbering: locate the first top-level chapter named by the
+    // `appendix-from` frontmatter key. A state-gated numbering switch is emitted
+    // just before it (see APPENDIX_SWITCH); when the template does not register a
+    // localized label the switch is a no-op, so this degrades gracefully.
+    let appendix_from = appendix_from_value(doc);
+    let appendix_idx = appendix_from.as_deref()
+        .and_then(|af| appendix_boundary_index(doc, level_offset, title_idx, af));
+
     // Revision / approval section hoisting.
     // The frontmatter values name an H2 section; we extract its content blocks,
     // render them into a Typst content variable, inject that into `fm`, and
@@ -100,6 +108,7 @@ pub fn render_typst(doc: &Document, template: Option<&str>, _options: &RenderOpt
             for (i, block) in doc.blocks.iter().enumerate() {
                 if Some(i) == title_idx { continue; }
                 if in_range(i, revision_range) || in_range(i, approval_range) { continue; }
+                if Some(i) == appendix_idx { out.push_str(APPENDIX_SWITCH); }
                 render_block(&mut out, block, level_offset);
             }
         }
@@ -110,6 +119,7 @@ pub fn render_typst(doc: &Document, template: Option<&str>, _options: &RenderOpt
             for (i, block) in doc.blocks.iter().enumerate() {
                 if Some(i) == title_idx { continue; }
                 if in_range(i, revision_range) || in_range(i, approval_range) { continue; }
+                if Some(i) == appendix_idx { out.push_str(APPENDIX_SWITCH); }
                 render_block(&mut out, block, level_offset);
             }
         }
@@ -474,7 +484,14 @@ fn render_block(out: &mut String, block: &Block, level_offset: u8) {
         }
         Block::Table { header, rows, alignments } => {
             let col_count = header.cells.len().max(1);
-            out.push_str(&format!("#table(\n  columns: {},\n", col_count));
+            // Wrap the table in a scope that turns OFF paragraph justification
+            // (so wrapped cells are ragged, not stretched across the column) but
+            // turns ON hyphenation. Typst's default `hyphenate: auto` only breaks
+            // words when justifying, so without this a long unbreakable word (e.g.
+            // "Netwerkconfiguratie") would overflow into the neighbouring column
+            // instead of wrapping. `lang` from the outer `set text` still applies.
+            out.push_str("#{\n  set par(justify: false)\n  set text(hyphenate: true)\n");
+            out.push_str(&format!("  table(\n    columns: {},\n", col_count));
             // Emit column alignments when at least one column is non-left
             if alignments.iter().any(|a| !matches!(a, ColAlign::Left)) {
                 let align_strs: Vec<&str> = (0..col_count).map(|i| {
@@ -484,21 +501,21 @@ fn render_block(out: &mut String, block: &Block, level_offset: u8) {
                         _                      => "left",
                     }
                 }).collect();
-                out.push_str(&format!("  align: ({}),\n", align_strs.join(", ")));
+                out.push_str(&format!("    align: ({}),\n", align_strs.join(", ")));
             }
             for cell in &header.cells {
-                out.push_str("  [*");
+                out.push_str("    [*");
                 render_inlines(out, cell);
                 out.push_str("*],\n");
             }
             for row in rows {
                 for cell in &row.cells {
-                    out.push_str("  [");
+                    out.push_str("    [");
                     render_inlines(out, cell);
                     out.push_str("],\n");
                 }
             }
-            out.push_str(")\n\n");
+            out.push_str("  )\n}\n\n");
         }
         Block::Callout { kind, title, body } => {
             out.push_str(&format!("#callout({}, {})[\n",
@@ -641,11 +658,27 @@ fn render_inline(out: &mut String, inline: &Inline) {
             out.push(']');
         }
         Inline::Image { src, alt, width } => {
-            let img = match width {
-                Some(w) => format!("image({}, width: {}pt)", typst_string_val(src), w),
-                None    => format!("image({})", typst_string_val(src)),
-            };
-            out.push_str(&format!("#figure({}, caption: [{}])", img, escape_typst(alt)));
+            if is_unsupported_embed(src) {
+                // Non-image embeds — Obsidian "Bases" (`![[x.base]]`), PDFs, note
+                // transclusions, audio/video, etc. — can only be rendered by the
+                // Omd2Typst Obsidian plugin (which pre-processes them before this
+                // engine runs). Reaching here means the engine was handed a raw
+                // non-image embed (e.g. via the CLI). Emit a visible warning
+                // instead of an `image()` call — Typst would otherwise reject the
+                // file with "unknown image format".
+                out.push_str(&format!(
+                    "#block(fill: rgb(\"#fff5ea\"), inset: 8pt, radius: 4pt, width: 100%)[\
+                     #text(fill: rgb(\"#b45309\"), weight: \"bold\")[Embed not supported in the CLI:] \
+                     #raw({})]",
+                    typst_string_val(src),
+                ));
+            } else {
+                let img = match width {
+                    Some(w) => format!("image({}, width: {}pt)", typst_string_val(src), w),
+                    None    => format!("image({})", typst_string_val(src)),
+                };
+                out.push_str(&format!("#figure({}, caption: [{}])", img, escape_typst(alt)));
+            }
         }
         Inline::SoftBreak => out.push(' '),
         Inline::HardBreak => out.push_str("\\\n"),
@@ -690,6 +723,161 @@ fn inlines_to_plain_text(inlines: &[Inline]) -> String {
 /// Wrap a plain string in a Typst string literal with proper escaping.
 fn typst_string_val(s: &str) -> String {
     format!("\"{}\"", s.replace('\\', "\\\\").replace('"', "\\\""))
+}
+
+/// Emitted just before the first appendix chapter. Resets the heading counter
+/// and switches heading numbering to the appendix scheme — but only when a
+/// template has registered a localized label in `state("omd-appendix-label")`.
+/// Otherwise the wrapper reproduces normal `1.1.` numbering and skips the reset,
+/// so a non-appendix-aware template (or the built-in one) degrades gracefully.
+/// The over-long `"A.1.1.1.1"` pattern is intentional: Typst uses only as many
+/// counting symbols as there are numbers, giving `A.1`, `A.1.1`, ….
+const APPENDIX_SWITCH: &str = r##"#context { if state("omd-appendix-label", none).get() != none { counter(heading).update(0) } }
+#set heading(numbering: (..n) => context {
+  let label = state("omd-appendix-label", none).get()
+  let nums = n.pos()
+  if label == none { numbering("1.1.", ..nums) }
+  else if nums.len() == 1 { [#label #numbering("A", nums.first()) -] }
+  else { numbering("A.1.1.1.1", ..nums) }
+})
+"##;
+
+/// Plain-text value of the `appendix-from` frontmatter key, trimmed.
+/// `None` when the key is absent or empty.
+fn appendix_from_value(doc: &Document) -> Option<String> {
+    doc.frontmatter.iter()
+        .find(|(k, _)| k == "appendix-from")
+        .map(|(_, v)| fm_plain_text(v).trim().to_string())
+        .filter(|s| !s.is_empty())
+}
+
+/// Block index of the first effective-level-1 heading whose trimmed plain text
+/// equals `appendix_from` — the appendix boundary. The document title is skipped.
+fn appendix_boundary_index(
+    doc: &Document,
+    level_offset: u8,
+    title_idx: Option<usize>,
+    appendix_from: &str,
+) -> Option<usize> {
+    doc.blocks.iter().enumerate().find_map(|(i, b)| {
+        if Some(i) == title_idx {
+            return None;
+        }
+        if let Block::Heading { level, inlines } = b {
+            let effective = level.saturating_sub(level_offset).max(1);
+            if effective == 1 && inlines_to_plain_text(inlines).trim() == appendix_from {
+                return Some(i);
+            }
+        }
+        None
+    })
+}
+
+/// Returns the `appendix-from` value when it is set but names no top-level
+/// chapter, so the CLI can warn. `None` when unset or successfully matched.
+pub fn appendix_unmatched(doc: &Document) -> Option<String> {
+    let appendix_from = appendix_from_value(doc)?;
+    let title_idx = doc.blocks.iter()
+        .position(|b| matches!(b, Block::Heading { level: 1, .. }));
+    let has_fm_title = doc.frontmatter.iter().any(|(k, _)| k == "title");
+    let level_offset = if has_fm_title || title_idx.is_some() { 1 } else { 0 };
+    if appendix_boundary_index(doc, level_offset, title_idx, &appendix_from).is_some() {
+        None
+    } else {
+        Some(appendix_from)
+    }
+}
+
+/// File extensions Typst can embed via `image()`.
+const IMAGE_EXTS: &[&str] = &["png", "jpg", "jpeg", "gif", "svg", "webp"];
+
+/// Lowercased file extension of an embed target, ignoring any `#…`/`?…`
+/// fragment. `None` when the target has no extension (e.g. a bare note
+/// transclusion `![[note]]`), which is left to render as an image as before.
+fn embed_extension(src: &str) -> Option<String> {
+    let path = src.split(['#', '?']).next().unwrap_or(src).trim_end();
+    let name = path.rsplit(['/', '\\']).next().unwrap_or(path);
+    let dot = name.rfind('.')?;
+    if dot == 0 {
+        return None; // leading-dot name like ".gitkeep" — not an extension
+    }
+    Some(name[dot + 1..].to_ascii_lowercase())
+}
+
+/// True when an embed target is *not* a Typst-renderable image (e.g. `.base`,
+/// `.pdf`, `.md`, `.mp3`, `.mp4`, `.canvas`). Such embeds are handled by the
+/// Obsidian plugin but not by this engine, so the renderer emits a warning
+/// rather than an `image()` call. Extension-less targets are treated as images.
+fn is_unsupported_embed(src: &str) -> bool {
+    match embed_extension(src) {
+        Some(ext) => !IMAGE_EXTS.contains(&ext.as_str()),
+        None => false,
+    }
+}
+
+/// Collect the `src` of every embed this engine cannot render as an image
+/// (`.base`, `.pdf`, `.md`, audio/video, …). First-seen order, de-duplicated.
+/// The CLI uses this to warn on stderr; the rendered document also shows an
+/// inline notice for each such embed.
+pub fn collect_unsupported_embeds(doc: &Document) -> Vec<String> {
+    let mut found = Vec::new();
+    for block in &doc.blocks {
+        collect_block_embeds(block, &mut found);
+    }
+    let mut seen = std::collections::HashSet::new();
+    found.into_iter().filter(|s| seen.insert(s.clone())).collect()
+}
+
+fn collect_block_embeds(block: &Block, out: &mut Vec<String>) {
+    match block {
+        Block::Heading { inlines, .. } => collect_inline_embeds(inlines, out),
+        Block::Paragraph(inlines) => collect_inline_embeds(inlines, out),
+        Block::Table { header, rows, .. } => {
+            for cell in &header.cells {
+                collect_inline_embeds(cell, out);
+            }
+            for row in rows {
+                for cell in &row.cells {
+                    collect_inline_embeds(cell, out);
+                }
+            }
+        }
+        Block::Callout { body, .. } => {
+            for b in body {
+                collect_block_embeds(b, out);
+            }
+        }
+        Block::BlockQuote(body) => {
+            for b in body {
+                collect_block_embeds(b, out);
+            }
+        }
+        Block::BulletList(items) | Block::OrderedList(items) => {
+            for item in items {
+                for b in &item.blocks {
+                    collect_block_embeds(b, out);
+                }
+            }
+        }
+        Block::CodeBlock { .. } | Block::ThematicBreak => {}
+    }
+}
+
+fn collect_inline_embeds(inlines: &[Inline], out: &mut Vec<String>) {
+    for inline in inlines {
+        match inline {
+            Inline::Image { src, .. } if is_unsupported_embed(src) => out.push(src.clone()),
+            Inline::Bold(children)
+            | Inline::Italic(children)
+            | Inline::Strikethrough(children)
+            | Inline::Highlight(children)
+            | Inline::Footnote(children)
+            | Inline::Superscript(children)
+            | Inline::Subscript(children) => collect_inline_embeds(children, out),
+            Inline::Link { text, .. } => collect_inline_embeds(text, out),
+            _ => {}
+        }
+    }
 }
 
 /// Render a frontmatter value to a Typst expression.
@@ -823,6 +1011,157 @@ mod tests {
         // No emoji characters in output
         assert!(!out.contains('✅'), "Expected no emoji in checkbox output");
         assert!(!out.contains('🔲'), "Expected no emoji in checkbox output");
+    }
+
+    #[test]
+    fn base_embed_emits_warning_not_image() {
+        // A `![[x.base]]` embed must NOT become an image() call (Typst rejects
+        // `.base` as an image format); it should render a visible warning.
+        let doc = parse_markdown("![[_assets/test.base]]\n");
+        let out = render_typst(&doc, None, &RenderOptions::default());
+        assert!(
+            out.contains("Embed not supported in the CLI:"),
+            "Expected embed warning in output:\n{out}"
+        );
+        assert!(
+            !out.contains("image(\"_assets/test.base\")"),
+            "Base embed must not be rendered as an image():\n{out}"
+        );
+    }
+
+    #[test]
+    fn non_image_embeds_emit_warning() {
+        // The warning generalizes beyond .base: PDFs, note transclusions,
+        // audio/video, etc. must all render a placeholder, never image().
+        for src in ["doc.pdf", "note.md", "clip.mp4", "sound.mp3", "board.canvas"] {
+            let doc = parse_markdown(&format!("![[{src}]]\n"));
+            let out = render_typst(&doc, None, &RenderOptions::default());
+            assert!(
+                out.contains("Embed not supported in the CLI:"),
+                "Expected warning for {src}:\n{out}"
+            );
+            assert!(
+                !out.contains(&format!("image(\"{src}\")")),
+                "{src} must not be rendered as an image():\n{out}"
+            );
+        }
+    }
+
+    #[test]
+    fn regular_images_still_render_as_figure() {
+        // The carve-out must not affect real image formats.
+        for src in ["pic.png", "photo.JPG", "diagram.svg", "anim.gif", "shot.webp"] {
+            let doc = parse_markdown(&format!("![alt]({src})\n"));
+            let out = render_typst(&doc, None, &RenderOptions::default());
+            assert!(
+                out.contains(&format!("image(\"{src}\")")),
+                "Expected {src} to still render as image():\n{out}"
+            );
+        }
+    }
+
+    #[test]
+    fn appendix_from_emits_switch_before_matched_chapter() {
+        let md = "---\ntitle: Doc\nappendix-from: Appendices\n---\n\n\
+                  ## Intro\n\n## Appendices\n\n## More\n";
+        let doc = parse_markdown(md);
+        let out = render_typst(&doc, None, &RenderOptions::default());
+        // The state-gated switch is emitted…
+        assert!(
+            out.contains("state(\"omd-appendix-label\", none)"),
+            "expected appendix switch in output:\n{out}"
+        );
+        // …immediately before the "Appendices" chapter, not before "Intro".
+        let switch_at = out.find("omd-appendix-label").unwrap();
+        let appendices_at = out.find("= Appendices").unwrap();
+        let intro_at = out.find("= Intro").unwrap();
+        assert!(switch_at < appendices_at, "switch must precede the appendix heading");
+        assert!(switch_at > intro_at, "switch must not precede a normal chapter");
+        // Graceful design: no template symbol is imported/referenced.
+        assert!(!out.contains("appendix-numbering"), "must not reference a template symbol");
+    }
+
+    #[test]
+    fn no_appendix_from_leaves_output_unchanged() {
+        let md = "---\ntitle: Doc\n---\n\n## Intro\n\n## Body\n";
+        let doc = parse_markdown(md);
+        let out = render_typst(&doc, None, &RenderOptions::default());
+        assert!(!out.contains("omd-appendix-label"), "no switch without appendix-from:\n{out}");
+        assert!(appendix_unmatched(&doc).is_none());
+    }
+
+    #[test]
+    fn appendix_from_no_match_warns_and_emits_no_switch() {
+        // Names a chapter that doesn't exist → no switch, and the CLI-facing
+        // helper reports the unmatched value.
+        let md = "---\ntitle: Doc\nappendix-from: Ghost\n---\n\n## Intro\n\n## Body\n";
+        let doc = parse_markdown(md);
+        let out = render_typst(&doc, None, &RenderOptions::default());
+        assert!(!out.contains("omd-appendix-label"), "no switch when unmatched:\n{out}");
+        assert_eq!(appendix_unmatched(&doc), Some("Ghost".to_string()));
+    }
+
+    #[test]
+    fn appendix_from_matches_only_top_level_chapters() {
+        // A level-2 heading with the same text must NOT trigger the switch.
+        let md = "---\ntitle: Doc\nappendix-from: Details\n---\n\n## Intro\n\n### Details\n";
+        let doc = parse_markdown(md);
+        let out = render_typst(&doc, None, &RenderOptions::default());
+        assert!(!out.contains("omd-appendix-label"), "level-2 match must not switch:\n{out}");
+        assert_eq!(appendix_unmatched(&doc), Some("Details".to_string()));
+    }
+
+    #[test]
+    fn table_cells_are_not_justified_but_hyphenate() {
+        // Body text uses par(justify: true); tables must scope it off so wrapped
+        // cells are left-aligned (ragged) — and must turn hyphenation ON so long
+        // words wrap instead of overflowing into the next column.
+        let doc = parse_markdown("| A | B |\n|---|---|\n| one two three four | x |\n");
+        let out = render_typst(&doc, None, &RenderOptions::default());
+        assert!(
+            out.contains("set par(justify: false)"),
+            "table must disable paragraph justification:\n{out}"
+        );
+        assert!(
+            out.contains("set text(hyphenate: true)"),
+            "table must enable hyphenation so long words wrap:\n{out}"
+        );
+    }
+
+    #[test]
+    fn spaced_wikilink_filenames_parse_as_embeds() {
+        // A wikilink whose filename contains spaces must still parse as an embed
+        // (the destination is angle-bracket wrapped so the space doesn't
+        // terminate the URL). Previously this degraded to literal text.
+        let doc = parse_markdown("![[Some Note.md]]\n");
+        let out = render_typst(&doc, None, &RenderOptions::default());
+        assert!(
+            out.contains("Embed not supported in the CLI:"),
+            "spaced .md embed should warn, not render as text:\n{out}"
+        );
+        assert_eq!(collect_unsupported_embeds(&doc), vec!["Some Note.md"]);
+
+        // A spaced *image* filename renders as image() with the space preserved.
+        let doc2 = parse_markdown("![[My Image.png]]\n");
+        let out2 = render_typst(&doc2, None, &RenderOptions::default());
+        assert!(
+            out2.contains("image(\"My Image.png\")"),
+            "spaced image should render as image():\n{out2}"
+        );
+    }
+
+    #[test]
+    fn collect_unsupported_embeds_dedupes_and_finds_nested() {
+        // Walks into paragraphs, lists, callouts, etc.; de-duplicates.
+        let md = "\
+![[a.base]]\n\n\
+- item with ![[a.base]] again\n\
+- ![[movie.mp4]]\n\n\
+> [!note] title\n> ![[doc.pdf]]\n\n\
+![real](pic.png)\n";
+        let doc = parse_markdown(md);
+        let found = collect_unsupported_embeds(&doc);
+        assert_eq!(found, vec!["a.base", "movie.mp4", "doc.pdf"], "got: {found:?}");
     }
 
     #[test]

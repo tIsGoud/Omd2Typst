@@ -1,6 +1,9 @@
 mod world;
 
-use omd2typst_core::{parse_markdown, render_typst, RenderOptions, BUILTIN_TEMPLATE};
+use omd2typst_core::{
+    appendix_unmatched, collect_unsupported_embeds, parse_markdown, render_typst, RenderOptions,
+    BUILTIN_TEMPLATE,
+};
 
 use clap::{Parser, ValueEnum};
 use anyhow::{Context, Result};
@@ -95,6 +98,28 @@ fn main() -> Result<()> {
         .with_context(|| format!("Cannot read input file: {}", input_path))?;
 
     let doc = parse_markdown(&input);
+
+    // Warn about embeds the CLI cannot render (Obsidian Bases, PDFs, note
+    // transclusions, audio/video, …). These are handled only by the Obsidian
+    // plugin; the document shows an inline placeholder for each.
+    for src in collect_unsupported_embeds(&doc) {
+        eprintln!(
+            "warning: embed '{}' is not supported by the CLI \
+             (only the Omd2Typst Obsidian plugin can render it); \
+             inserted a placeholder note instead.",
+            src
+        );
+    }
+
+    // Warn when `appendix-from` names a chapter that does not exist.
+    if let Some(name) = appendix_unmatched(&doc) {
+        eprintln!(
+            "warning: appendix-from: '{}' did not match any top-level chapter; \
+             appendix numbering was not applied.",
+            name
+        );
+    }
+
     let typst_src = render_typst(&doc, cli.template.as_deref(), &RenderOptions::default());
 
     match format {
