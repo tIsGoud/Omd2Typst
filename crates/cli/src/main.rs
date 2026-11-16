@@ -1,7 +1,8 @@
 mod world;
 
 use omd2typst_core::{
-    appendix_unmatched, collect_unsupported_embeds, parse_markdown, render_typst, RenderOptions,
+    appendix_unmatched, collect_unsupported_embeds, numbering_unmatched, parse_markdown,
+    render_typst, RenderOptions,
     BUILTIN_TEMPLATE,
 };
 
@@ -116,6 +117,15 @@ fn main() -> Result<()> {
         eprintln!(
             "warning: appendix-from: '{}' did not match any top-level chapter; \
              appendix numbering was not applied.",
+            name
+        );
+    }
+
+    // Warn when `numbering-from` names a chapter that does not exist.
+    if let Some(name) = numbering_unmatched(&doc) {
+        eprintln!(
+            "warning: numbering-from: '{}' did not match any top-level chapter; \
+             numbering starts from the beginning.",
             name
         );
     }

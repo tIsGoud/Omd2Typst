@@ -34,6 +34,12 @@ pub fn render_typst(doc: &Document, template: Option<&str>, _options: &RenderOpt
     let appendix_idx = appendix_from.as_deref()
         .and_then(|af| appendix_boundary_index(doc, level_offset, title_idx, af));
 
+    // Numbering start: chapters before the one named by `numbering-from` stay
+    // unnumbered; numbering begins at 1 on the named chapter. Absent, empty or
+    // unmatched values leave numbering untouched (the CLI warns when unmatched).
+    let numbering_idx = numbering_from_value(doc)
+        .and_then(|nf| appendix_boundary_index(doc, level_offset, title_idx, &nf));
+
     // Revision / approval section hoisting.
     // The frontmatter values name an H2 section; we extract its content blocks,
     // render them into a Typst content variable, inject that into `fm`, and
@@ -105,9 +111,15 @@ pub fn render_typst(doc: &Document, template: Option<&str>, _options: &RenderOpt
             out.push_str(&format!("#import \"{}\": template, callout\n", path));
             out.push_str("#show: template.with(fm: fm)\n\n");
             // Emit content blocks; skip the H1 title and any hoisted sections.
+            let mut numbering_off_emitted = false;
             for (i, block) in doc.blocks.iter().enumerate() {
                 if Some(i) == title_idx { continue; }
                 if in_range(i, revision_range) || in_range(i, approval_range) { continue; }
+                if numbering_idx.is_some() && !numbering_off_emitted {
+                    out.push_str(NUMBERING_OFF);
+                    numbering_off_emitted = true;
+                }
+                if Some(i) == numbering_idx { out.push_str(NUMBERING_START); }
                 if Some(i) == appendix_idx { out.push_str(APPENDIX_SWITCH); }
                 render_block(&mut out, block, level_offset);
             }
@@ -116,9 +128,15 @@ pub fn render_typst(doc: &Document, template: Option<&str>, _options: &RenderOpt
             out.push_str(BUILTIN_PREAMBLE);
             out.push_str(BUILTIN_COVER);
             out.push_str("\n#outline(indent: 1em)\n\n#pagebreak()\n\n");
+            let mut numbering_off_emitted = false;
             for (i, block) in doc.blocks.iter().enumerate() {
                 if Some(i) == title_idx { continue; }
                 if in_range(i, revision_range) || in_range(i, approval_range) { continue; }
+                if numbering_idx.is_some() && !numbering_off_emitted {
+                    out.push_str(NUMBERING_OFF);
+                    numbering_off_emitted = true;
+                }
+                if Some(i) == numbering_idx { out.push_str(NUMBERING_START); }
                 if Some(i) == appendix_idx { out.push_str(APPENDIX_SWITCH); }
                 render_block(&mut out, block, level_offset);
             }
@@ -742,13 +760,28 @@ const APPENDIX_SWITCH: &str = r##"#context { if state("omd-appendix-label", none
 })
 "##;
 
-/// Plain-text value of the `appendix-from` frontmatter key, trimmed.
+/// Emitted before the first body block when `numbering-from` is set and
+/// matched: headings are unnumbered (but still listed in the outline) until
+/// `NUMBERING_START`. Standard `1.1.` numbering is restored there, which is the
+/// scheme every shipped template and the built-in preamble use.
+const NUMBERING_OFF: &str = "#set heading(numbering: none)\n";
+const NUMBERING_START: &str = "#set heading(numbering: \"1.1.\")\n#counter(heading).update(0)\n";
+
+/// Plain-text value of a chapter-naming frontmatter key, trimmed.
 /// `None` when the key is absent or empty.
-fn appendix_from_value(doc: &Document) -> Option<String> {
+fn chapter_key_value(doc: &Document, key: &str) -> Option<String> {
     doc.frontmatter.iter()
-        .find(|(k, _)| k == "appendix-from")
+        .find(|(k, _)| k == key)
         .map(|(_, v)| fm_plain_text(v).trim().to_string())
         .filter(|s| !s.is_empty())
+}
+
+fn appendix_from_value(doc: &Document) -> Option<String> {
+    chapter_key_value(doc, "appendix-from")
+}
+
+fn numbering_from_value(doc: &Document) -> Option<String> {
+    chapter_key_value(doc, "numbering-from")
 }
 
 /// Block index of the first effective-level-1 heading whose trimmed plain text
@@ -776,7 +809,16 @@ fn appendix_boundary_index(
 /// Returns the `appendix-from` value when it is set but names no top-level
 /// chapter, so the CLI can warn. `None` when unset or successfully matched.
 pub fn appendix_unmatched(doc: &Document) -> Option<String> {
-    let appendix_from = appendix_from_value(doc)?;
+    chapter_unmatched(doc, appendix_from_value(doc)?)
+}
+
+/// Returns the `numbering-from` value when it is set but names no top-level
+/// chapter, so the CLI can warn. `None` when unset or successfully matched.
+pub fn numbering_unmatched(doc: &Document) -> Option<String> {
+    chapter_unmatched(doc, numbering_from_value(doc)?)
+}
+
+fn chapter_unmatched(doc: &Document, appendix_from: String) -> Option<String> {
     let title_idx = doc.blocks.iter()
         .position(|b| matches!(b, Block::Heading { level: 1, .. }));
     let has_fm_title = doc.frontmatter.iter().any(|(k, _)| k == "title");
@@ -1109,6 +1151,44 @@ mod tests {
         let out = render_typst(&doc, None, &RenderOptions::default());
         assert!(!out.contains("omd-appendix-label"), "level-2 match must not switch:\n{out}");
         assert_eq!(appendix_unmatched(&doc), Some("Details".to_string()));
+    }
+
+    #[test]
+    fn numbering_from_unnumbers_chapters_before_and_restarts_at_match() {
+        let md = "---\ntitle: Doc\nnumbering-from: Introduction\n---\n\n\
+                  ## Reading guide\n\n## Introduction\n\n## Body\n";
+        let doc = parse_markdown(md);
+        let out = render_typst(&doc, None, &RenderOptions::default());
+        let off = out.find("numbering: none").expect("numbering must be switched off");
+        let guide = out.find("= Reading guide").unwrap();
+        let start = out.find("counter(heading).update(0)").expect("numbering must restart");
+        let intro = out.find("= Introduction").unwrap();
+        assert!(off < guide, "numbering off before the first chapter");
+        assert!(guide < start && start < intro, "restart between guide and Introduction");
+        assert!(numbering_unmatched(&doc).is_none());
+    }
+
+    #[test]
+    fn numbering_from_missing_or_empty_changes_nothing() {
+        for fm in ["title: Doc\n", "title: Doc\nnumbering-from:\n"] {
+            let md = format!("---\n{fm}---\n\n## Intro\n\n## Body\n");
+            let doc = parse_markdown(&md);
+            let out = render_typst(&doc, None, &RenderOptions::default());
+            assert!(!out.contains("numbering: none"), "no switch for {fm:?}:\n{out}");
+            assert!(numbering_unmatched(&doc).is_none());
+        }
+    }
+
+    #[test]
+    fn numbering_from_no_match_warns_and_changes_nothing() {
+        let md = "---\ntitle: Doc\nnumbering-from: Ghost\n---\n\n## Intro\n\n### Details\n";
+        let doc = parse_markdown(md);
+        let out = render_typst(&doc, None, &RenderOptions::default());
+        assert!(!out.contains("numbering: none"), "unmatched must not unnumber:\n{out}");
+        assert_eq!(numbering_unmatched(&doc), Some("Ghost".to_string()));
+        // Only top-level chapters match.
+        let md = "---\ntitle: Doc\nnumbering-from: Details\n---\n\n## Intro\n\n### Details\n";
+        assert_eq!(numbering_unmatched(&parse_markdown(md)), Some("Details".to_string()));
     }
 
     #[test]

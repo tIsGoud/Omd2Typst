@@ -8,7 +8,8 @@ pub use ast::{
 };
 pub use parser::parse_markdown;
 pub use renderer::{
-    appendix_unmatched, collect_unsupported_embeds, render_typst, BUILTIN_TEMPLATE,
+    appendix_unmatched, collect_unsupported_embeds, numbering_unmatched, render_typst,
+    BUILTIN_TEMPLATE,
 };
 
 /// Rendering options — currently empty, extended as consumers reveal needs.
