@@ -1,5 +1,27 @@
 # Release Notes
 
+## v0.12.0 — `numbering-from` frontmatter key
+
+**Unnumbered front matter chapters.** A new `numbering-from` frontmatter key
+names the first chapter that should be numbered. Top-level chapters before it
+(for example a reading guide) render without a number but stay in the table of
+contents; numbering restarts at 1 on the named chapter. An empty or missing
+value numbers from the beginning, as before.
+
+```yaml
+numbering-from: Introduction
+```
+
+The value must match a top-level chapter. A name that matches nothing (or only a
+subheading) changes nothing, and the CLI prints a stderr warning. The key works
+with every template, including the built-in one, and combines with
+`appendix-from`. From the named chapter on, headings use the standard `1.1.`
+numbering scheme that all shipped templates use.
+
+The key is also listed in `templates/omd2typst-frontmatter.md`.
+
+---
+
 ## v0.11.0 — Appendix headings, table layout & embed handling
 
 **Appendix headings.** A new `appendix-from` frontmatter key names the first
