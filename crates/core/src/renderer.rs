@@ -51,6 +51,13 @@ pub fn render_typst(doc: &Document, template: Option<&str>, _options: &RenderOpt
         .find(|(k, _)| k == "approval-table")
         .and_then(|(_, v)| extract_named_section(&doc.blocks, &fm_plain_text(v)));
 
+    // Reading guide: same hoisting as the revision/approval sections. Templates
+    // that render `fm.at("reading-guide-blocks")` show it as its own unnumbered
+    // page; the section is not part of the numbered body.
+    let reading_range = doc.frontmatter.iter()
+        .find(|(k, _)| k == "reading-guide")
+        .and_then(|(_, v)| extract_named_section(&doc.blocks, &fm_plain_text(v)));
+
     // Emit content variables before the fm dict so fm can reference them.
     if let Some((start, end)) = revision_range {
         let rendered = render_blocks_to_string(&doc.blocks[start + 1..end], level_offset);
@@ -59,6 +66,10 @@ pub fn render_typst(doc: &Document, template: Option<&str>, _options: &RenderOpt
     if let Some((start, end)) = approval_range {
         let rendered = render_blocks_to_string(&doc.blocks[start + 1..end], level_offset);
         out.push_str(&format!("#let _approval_blocks = [\n{}]\n", rendered));
+    }
+    if let Some((start, end)) = reading_range {
+        let rendered = render_blocks_to_string(&doc.blocks[start + 1..end], level_offset);
+        out.push_str(&format!("#let _reading_guide_blocks = [\n{}]\n", rendered));
     }
 
     // Frontmatter: individual #let variables, available everywhere in the file.
@@ -79,7 +90,8 @@ pub fn render_typst(doc: &Document, template: Option<&str>, _options: &RenderOpt
     let fm_has_entries = !doc.frontmatter.is_empty()
         || synth_title.is_some()
         || revision_range.is_some()
-        || approval_range.is_some();
+        || approval_range.is_some()
+        || reading_range.is_some();
     if fm_has_entries {
         out.push_str("#let fm = (\n");
         for (key, _) in &doc.frontmatter {
@@ -93,6 +105,9 @@ pub fn render_typst(doc: &Document, template: Option<&str>, _options: &RenderOpt
         }
         if approval_range.is_some() {
             out.push_str("  \"approval-blocks\": _approval_blocks,\n");
+        }
+        if reading_range.is_some() {
+            out.push_str("  \"reading-guide-blocks\": _reading_guide_blocks,\n");
         }
         out.push_str(")\n\n");
     } else {
@@ -114,7 +129,7 @@ pub fn render_typst(doc: &Document, template: Option<&str>, _options: &RenderOpt
             let mut numbering_off_emitted = false;
             for (i, block) in doc.blocks.iter().enumerate() {
                 if Some(i) == title_idx { continue; }
-                if in_range(i, revision_range) || in_range(i, approval_range) { continue; }
+                if in_range(i, revision_range) || in_range(i, approval_range) || in_range(i, reading_range) { continue; }
                 if numbering_idx.is_some() && !numbering_off_emitted {
                     out.push_str(NUMBERING_OFF);
                     numbering_off_emitted = true;
@@ -131,7 +146,7 @@ pub fn render_typst(doc: &Document, template: Option<&str>, _options: &RenderOpt
             let mut numbering_off_emitted = false;
             for (i, block) in doc.blocks.iter().enumerate() {
                 if Some(i) == title_idx { continue; }
-                if in_range(i, revision_range) || in_range(i, approval_range) { continue; }
+                if in_range(i, revision_range) || in_range(i, approval_range) || in_range(i, reading_range) { continue; }
                 if numbering_idx.is_some() && !numbering_off_emitted {
                     out.push_str(NUMBERING_OFF);
                     numbering_off_emitted = true;
@@ -776,6 +791,16 @@ fn chapter_key_value(doc: &Document, key: &str) -> Option<String> {
         .filter(|s| !s.is_empty())
 }
 
+/// Returns the `reading-guide` value when it is set but names no H2 section,
+/// so the CLI can warn. `None` when unset or successfully matched.
+pub fn reading_guide_unmatched(doc: &Document) -> Option<String> {
+    let name = chapter_key_value(doc, "reading-guide")?;
+    match extract_named_section(&doc.blocks, &name) {
+        Some(_) => None,
+        None => Some(name),
+    }
+}
+
 fn appendix_from_value(doc: &Document) -> Option<String> {
     chapter_key_value(doc, "appendix-from")
 }
@@ -1189,6 +1214,36 @@ mod tests {
         // Only top-level chapters match.
         let md = "---\ntitle: Doc\nnumbering-from: Details\n---\n\n## Intro\n\n### Details\n";
         assert_eq!(numbering_unmatched(&parse_markdown(md)), Some("Details".to_string()));
+    }
+
+    #[test]
+    fn reading_guide_is_hoisted_out_of_the_body() {
+        let md = "---\ntitle: Doc\nreading-guide: Guide\n---\n\n\
+                  ## Guide\n\nRead this first.\n\n## Intro\n\nBody.\n";
+        let doc = parse_markdown(md);
+        let out = render_typst(&doc, None, &RenderOptions::default());
+        assert!(out.contains("#let _reading_guide_blocks = ["), "hoisted variable:\n{out}");
+        assert!(out.contains("\"reading-guide-blocks\": _reading_guide_blocks"), "fm entry:\n{out}");
+        assert!(!out.contains("= Guide"), "section must not be rendered in the body:\n{out}");
+        assert!(out.contains("= Intro"), "other chapters stay");
+        assert!(reading_guide_unmatched(&doc).is_none());
+    }
+
+    #[test]
+    fn reading_guide_missing_empty_or_unmatched_changes_nothing() {
+        for fm in ["title: Doc\n", "title: Doc\nreading-guide:\n"] {
+            let md = format!("---\n{fm}---\n\n## Guide\n\nText.\n");
+            let doc = parse_markdown(&md);
+            let out = render_typst(&doc, None, &RenderOptions::default());
+            assert!(!out.contains("_reading_guide_blocks"), "no hoist for {fm:?}:\n{out}");
+            assert!(out.contains("= Guide"));
+            assert!(reading_guide_unmatched(&doc).is_none());
+        }
+        let md = "---\ntitle: Doc\nreading-guide: Ghost\n---\n\n## Guide\n\nText.\n";
+        let doc = parse_markdown(md);
+        let out = render_typst(&doc, None, &RenderOptions::default());
+        assert!(out.contains("= Guide"), "unmatched keeps the chapter in the body");
+        assert_eq!(reading_guide_unmatched(&doc), Some("Ghost".to_string()));
     }
 
     #[test]

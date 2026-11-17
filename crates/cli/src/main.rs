@@ -1,7 +1,7 @@
 mod world;
 
 use omd2typst_core::{
-    appendix_unmatched, collect_unsupported_embeds, numbering_unmatched, parse_markdown,
+    appendix_unmatched, collect_unsupported_embeds, numbering_unmatched, parse_markdown, reading_guide_unmatched,
     render_typst, RenderOptions,
     BUILTIN_TEMPLATE,
 };
@@ -126,6 +126,15 @@ fn main() -> Result<()> {
         eprintln!(
             "warning: numbering-from: '{}' did not match any top-level chapter; \
              numbering starts from the beginning.",
+            name
+        );
+    }
+
+    // Warn when `reading-guide` names an H2 section that does not exist.
+    if let Some(name) = reading_guide_unmatched(&doc) {
+        eprintln!(
+            "warning: reading-guide: '{}' did not match any '## ' section; \
+             no reading-guide page was created.",
             name
         );
     }
