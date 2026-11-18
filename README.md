@@ -97,6 +97,12 @@ omd2typst input.md output.pdf
 # Use a custom template
 omd2typst input.md output.pdf --template my-template.typ
 
+# Wikilinks: text (default), bold, link or keep
+omd2typst input.md output.pdf --wikilinks bold
+
+# Real links: [[#Heading]] jumps to that heading, other notes open in Obsidian
+omd2typst input.md output.pdf --wikilinks link --obsidian-vault "My Vault"
+
 # Export the built-in template as a starting point for customisation
 omd2typst --export-template my-template.typ
 ```
@@ -309,6 +315,7 @@ set text(font: ("Your Serif Font", "Georgia", "Times New Roman", "Liberation Ser
 | Images — standard | `![alt](path)` | |
 | Images — with width | `![alt\|200](path)` | Width in points |
 | Images — wikilink | `![[path\|200]]` | Obsidian wikilink format |
+| Wikilinks `[[Note]]`, `[[Note\|alias]]`, `[[#Heading]]` | Rendered per `--wikilinks`: `text` (default), `bold`, `link`, `keep` — see below |
 | Code block | ` ```lang ``` ` | Language tag preserved for syntax highlighting |
 | Table | `| col |` | Left / center / right column alignment |
 | Callout | `> [!type] Title` | 13 built-in types with Lucide SVG icons in each type's accent colour |
@@ -383,7 +390,7 @@ The following Obsidian and Markdown features are **not** handled. They will eith
 
 | Feature | Reason |
 |---|---|
-| Wikilinks `[[Page Name]]` | Internal note links have no meaning in a single-file PDF export |
+| Wikilinks to other notes as in-document links | Other notes are not part of the PDF; with `--wikilinks link --obsidian-vault NAME` they become `obsidian://` links instead |
 | Note embeds `![[Note Name]]` | Embedding other notes would require resolving the full vault at runtime |
 | Obsidian comments `%%…%%` | Stripped from output (inline and block) |
 | Tags `#tag` | No equivalent concept in a PDF document |

@@ -2,7 +2,7 @@ mod world;
 
 use omd2typst_core::{
     appendix_unmatched, collect_unsupported_embeds, numbering_unmatched, parse_markdown, reading_guide_unmatched,
-    render_typst, RenderOptions,
+    render_typst, RenderOptions, WikilinkMode,
     BUILTIN_TEMPLATE,
 };
 
@@ -19,6 +19,7 @@ use std::fs;
     omd2typst notes.md output.typ
     omd2typst notes.md output.pdf
     omd2typst notes.md output.pdf --template my-template.typ
+    omd2typst notes.md output.pdf --wikilinks link --obsidian-vault \"My Vault\"
     omd2typst --export-template my-template.typ"
 )]
 struct Cli {
@@ -39,10 +40,40 @@ struct Cli {
     #[arg(short, long)]
     template: Option<String>,
 
+    /// How [[wikilinks]] are rendered: `text` (display text only), `bold`,
+    /// `link` (internal links to headings; links to other notes need
+    /// --obsidian-vault) or `keep` (leave the brackets as typed).
+    #[arg(long, value_enum, default_value_t = Wikilinks::Text)]
+    wikilinks: Wikilinks,
+
+    /// Obsidian vault name. With `--wikilinks link`, links to other notes become
+    /// obsidian://open links (the vault name is embedded in the PDF).
+    #[arg(long, value_name = "NAME")]
+    obsidian_vault: Option<String>,
+
     /// Write the built-in styling to FILE as a Typst template and exit.
     /// Edit the file, then pass it back with --template.
     #[arg(long, value_name = "FILE")]
     export_template: Option<String>,
+}
+
+#[derive(ValueEnum, Clone, Copy)]
+enum Wikilinks {
+    Text,
+    Bold,
+    Link,
+    Keep,
+}
+
+impl From<Wikilinks> for WikilinkMode {
+    fn from(w: Wikilinks) -> Self {
+        match w {
+            Wikilinks::Text => WikilinkMode::Text,
+            Wikilinks::Bold => WikilinkMode::Bold,
+            Wikilinks::Link => WikilinkMode::Link,
+            Wikilinks::Keep => WikilinkMode::Keep,
+        }
+    }
 }
 
 #[derive(ValueEnum, Clone)]
@@ -121,6 +152,10 @@ fn main() -> Result<()> {
         );
     }
 
+    if cli.obsidian_vault.is_some() && !matches!(cli.wikilinks, Wikilinks::Link) {
+        eprintln!("warning: --obsidian-vault has no effect without --wikilinks link.");
+    }
+
     // Warn when `numbering-from` names a chapter that does not exist.
     if let Some(name) = numbering_unmatched(&doc) {
         eprintln!(
@@ -139,7 +174,14 @@ fn main() -> Result<()> {
         );
     }
 
-    let typst_src = render_typst(&doc, cli.template.as_deref(), &RenderOptions::default());
+    let typst_src = render_typst(
+        &doc,
+        cli.template.as_deref(),
+        &RenderOptions {
+            wikilinks: cli.wikilinks.into(),
+            obsidian_vault: cli.obsidian_vault.clone(),
+        },
+    );
 
     match format {
         Format::Typst => {

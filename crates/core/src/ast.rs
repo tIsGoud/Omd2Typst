@@ -12,6 +12,10 @@ pub enum Inline {
     Subscript(Vec<Inline>),
     Code(String),
     Link { text: Vec<Inline>, url: String },
+    /// Obsidian wikilink `[[target#fragment|alias]]`. `text` is the display
+    /// text (the alias, or `Note`, `Heading` / `Note > Heading` when there is
+    /// none). `target` is empty for same-note links (`[[#Heading]]`).
+    WikiLink { target: String, fragment: Option<String>, text: Vec<Inline>, aliased: bool },
     Image { alt: String, src: String, width: Option<u32> },
     SoftBreak,
     HardBreak,

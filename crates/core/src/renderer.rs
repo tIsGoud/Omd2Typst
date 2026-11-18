@@ -1,11 +1,29 @@
 use crate::ast::*;
-use crate::RenderOptions;
+use crate::{RenderOptions, WikilinkMode};
+use std::cell::RefCell;
+use std::collections::HashMap;
 
 // ---------------------------------------------------------------------------
 // Public entry point
 // ---------------------------------------------------------------------------
 
-pub fn render_typst(doc: &Document, template: Option<&str>, _options: &RenderOptions) -> String {
+pub fn render_typst(doc: &Document, template: Option<&str>, options: &RenderOptions) -> String {
+    // Wikilink rendering needs document-wide state (mode, vault, heading labels)
+    // inside the free `render_*` functions. It is carried in a thread-local that
+    // lives only for the duration of this call.
+    WIKI_CTX.with(|c| {
+        *c.borrow_mut() = WikiCtx {
+            mode: options.wikilinks,
+            vault: options.obsidian_vault.clone().filter(|v| !v.trim().is_empty()),
+            headings: HashMap::new(),
+        };
+    });
+    let out = render_typst_inner(doc, template, options);
+    WIKI_CTX.with(|c| *c.borrow_mut() = WikiCtx::default());
+    out
+}
+
+fn render_typst_inner(doc: &Document, template: Option<&str>, options: &RenderOptions) -> String {
     let mut out = String::new();
 
     // Level offset: if the document has a title (from frontmatter or a level-1
@@ -57,6 +75,27 @@ pub fn render_typst(doc: &Document, template: Option<&str>, _options: &RenderOpt
     let reading_range = doc.frontmatter.iter()
         .find(|(k, _)| k == "reading-guide")
         .and_then(|(_, v)| extract_named_section(&doc.blocks, &fm_plain_text(v)));
+
+    // Wikilink-to-heading links (`[[#Heading]]`): in link mode, give each body
+    // heading a Typst label so such links can point at it. Only headings that
+    // end up in the body qualify (not the title, not hoisted sections), and only
+    // the first heading with a given text — the same one Obsidian jumps to.
+    let mut heading_labels: HashMap<usize, String> = HashMap::new();
+    if options.wikilinks == WikilinkMode::Link {
+        let mut by_text: HashMap<String, String> = HashMap::new();
+        for (i, block) in doc.blocks.iter().enumerate() {
+            if Some(i) == title_idx { continue; }
+            if in_range(i, revision_range) || in_range(i, approval_range) || in_range(i, reading_range) { continue; }
+            if let Block::Heading { inlines, .. } = block {
+                let key = normalize_heading(&inlines_to_plain_text(inlines));
+                if key.is_empty() || by_text.contains_key(&key) { continue; }
+                let label = format!("omd-h-{}", i);
+                by_text.insert(key, label.clone());
+                heading_labels.insert(i, label);
+            }
+        }
+        WIKI_CTX.with(|c| c.borrow_mut().headings = by_text);
+    }
 
     // Emit content variables before the fm dict so fm can reference them.
     if let Some((start, end)) = revision_range {
@@ -136,7 +175,7 @@ pub fn render_typst(doc: &Document, template: Option<&str>, _options: &RenderOpt
                 }
                 if Some(i) == numbering_idx { out.push_str(NUMBERING_START); }
                 if Some(i) == appendix_idx { out.push_str(APPENDIX_SWITCH); }
-                render_block(&mut out, block, level_offset);
+                render_body_block(&mut out, block, level_offset, heading_labels.get(&i));
             }
         }
         None => {
@@ -153,7 +192,7 @@ pub fn render_typst(doc: &Document, template: Option<&str>, _options: &RenderOpt
                 }
                 if Some(i) == numbering_idx { out.push_str(NUMBERING_START); }
                 if Some(i) == appendix_idx { out.push_str(APPENDIX_SWITCH); }
-                render_block(&mut out, block, level_offset);
+                render_body_block(&mut out, block, level_offset, heading_labels.get(&i));
             }
         }
     }
@@ -187,6 +226,7 @@ const BUILTIN_PREAMBLE: &str = r##"#set page(
 #set heading(numbering: "1.1.")
 #set table(stroke: 0.5pt)
 #show figure: set block(below: 1.5em)
+#show link: set text(fill: rgb("#1e3a5f"))
 
 #let _co-colors = (
   "note":      (fill: rgb("#dbeafe"), accent: rgb("#1d4ed8")),
@@ -398,6 +438,7 @@ pub const BUILTIN_TEMPLATE: &str = r##"// omd2typst template
   set text(font: ("Verdana", "Arial", "Liberation Sans"), size: 11pt)
   set par(justify: true, leading: 0.65em)
   set heading(numbering: "1.1.")
+  show link: set text(fill: rgb("#1e3a5f"))
 
   show heading.where(level: 1): it => {
     v(1.2em)
@@ -654,6 +695,116 @@ fn render_checkbox_list(out: &mut String, items: &[ListItem], level_offset: u8) 
     out.push_str(")\n\n");
 }
 
+// ---------------------------------------------------------------------------
+// Wikilinks
+// ---------------------------------------------------------------------------
+
+#[derive(Default)]
+struct WikiCtx {
+    mode: WikilinkMode,
+    vault: Option<String>,
+    /// Normalised heading text -> Typst label of the first such body heading.
+    headings: HashMap<String, String>,
+}
+
+thread_local! {
+    static WIKI_CTX: RefCell<WikiCtx> = RefCell::new(WikiCtx::default());
+}
+
+/// Heading text as compared by wikilinks: trimmed, lowercased, whitespace
+/// collapsed (Obsidian matches headings case-insensitively).
+fn normalize_heading(s: &str) -> String {
+    s.split_whitespace().collect::<Vec<_>>().join(" ").to_lowercase()
+}
+
+/// Percent-encode everything except RFC 3986 unreserved characters.
+fn percent_encode(s: &str) -> String {
+    let mut out = String::new();
+    for b in s.bytes() {
+        if b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_' | b'.' | b'~') {
+            out.push(b as char);
+        } else {
+            out.push_str(&format!("%{:02X}", b));
+        }
+    }
+    out
+}
+
+fn render_wikilink(out: &mut String, target: &str, fragment: Option<&str>, text: &[Inline], aliased: bool) {
+    let (mode, vault, label) = WIKI_CTX.with(|c| {
+        let c = c.borrow();
+        let label = if target.is_empty() {
+            fragment
+                .map(|f| normalize_heading(f.rsplit('#').next().unwrap_or(f)))
+                .and_then(|k| c.headings.get(&k).cloned())
+        } else {
+            None
+        };
+        (c.mode, c.vault.clone(), label)
+    });
+    match mode {
+        WikilinkMode::Keep => {
+            let mut raw = String::from("[[");
+            raw.push_str(target);
+            if let Some(f) = fragment {
+                raw.push('#');
+                raw.push_str(f);
+            }
+            if aliased {
+                raw.push('|');
+                raw.push_str(&inlines_to_plain_text(text));
+            }
+            raw.push_str("]]");
+            out.push_str(&escape_typst(&raw));
+        }
+        WikilinkMode::Text => render_inlines(out, text),
+        WikilinkMode::Bold => {
+            out.push_str("#strong[");
+            render_inlines(out, text);
+            out.push(']');
+        }
+        WikilinkMode::Link => {
+            if let Some(label) = label {
+                out.push_str(&format!("#link(<{}>)[", label));
+                render_inlines(out, text);
+                out.push(']');
+            } else if let (false, Some(vault)) = (target.is_empty(), vault) {
+                let mut file = target.to_string();
+                if let Some(f) = fragment {
+                    file.push('#');
+                    file.push_str(f);
+                }
+                let url = format!(
+                    "obsidian://open?vault={}&file={}",
+                    percent_encode(&vault),
+                    percent_encode(&file)
+                );
+                out.push_str(&format!("#link({})[", typst_string_val(&url)));
+                render_inlines(out, text);
+                out.push(']');
+            } else {
+                // Unresolvable here (heading not in the document, or no vault
+                // name for a link to another note): plain display text.
+                render_inlines(out, text);
+            }
+        }
+    }
+}
+
+/// Render a top-level body block; a heading that is a wikilink target gets its
+/// Typst label appended (`= Title <omd-h-3>`).
+fn render_body_block(out: &mut String, block: &Block, level_offset: u8, label: Option<&String>) {
+    match label {
+        Some(label) => {
+            let mut tmp = String::new();
+            render_block(&mut tmp, block, level_offset);
+            out.push_str(tmp.trim_end());
+            out.push_str(&format!(" <{}>\n\n", label));
+        }
+        None => render_block(out, block, level_offset),
+    }
+}
+
 fn render_inlines(out: &mut String, inlines: &[Inline]) {
     for inline in inlines {
         render_inline(out, inline);
@@ -689,6 +840,9 @@ fn render_inline(out: &mut String, inline: &Inline) {
             out.push_str(&format!("#link({})[", typst_string_val(url)));
             render_inlines(out, text);
             out.push(']');
+        }
+        Inline::WikiLink { target, fragment, text, aliased } => {
+            render_wikilink(out, target, fragment.as_deref(), text, *aliased);
         }
         Inline::Image { src, alt, width } => {
             if is_unsupported_embed(src) {
@@ -745,7 +899,8 @@ fn inlines_to_plain_text(inlines: &[Inline]) -> String {
             | Inline::Superscript(i)
             | Inline::Subscript(i)
             | Inline::Footnote(i)
-            | Inline::Link { text: i, .. }        => s.push_str(&inlines_to_plain_text(i)),
+            | Inline::Link { text: i, .. }
+            | Inline::WikiLink { text: i, .. }    => s.push_str(&inlines_to_plain_text(i)),
             Inline::Image { alt, .. }             => s.push_str(alt),
             Inline::SoftBreak | Inline::HardBreak => s.push(' '),
         }
@@ -941,7 +1096,7 @@ fn collect_inline_embeds(inlines: &[Inline], out: &mut Vec<String>) {
             | Inline::Footnote(children)
             | Inline::Superscript(children)
             | Inline::Subscript(children) => collect_inline_embeds(children, out),
-            Inline::Link { text, .. } => collect_inline_embeds(text, out),
+            Inline::Link { text, .. } | Inline::WikiLink { text, .. } => collect_inline_embeds(text, out),
             _ => {}
         }
     }
@@ -979,7 +1134,13 @@ fn render_fm_value(value: &FrontmatterValue) -> String {
 /// Returns true when `inlines` contains only unformatted text and whitespace —
 /// no bold, italic, code, links, etc.
 fn is_plain_inlines(inlines: &[Inline]) -> bool {
-    inlines.iter().all(|i| matches!(i, Inline::Text(_) | Inline::SoftBreak | Inline::HardBreak))
+    // In text mode a wikilink is just its display text, so it stays plain.
+    let text_mode = WIKI_CTX.with(|c| c.borrow().mode == WikilinkMode::Text);
+    inlines.iter().all(|i| match i {
+        Inline::Text(_) | Inline::SoftBreak | Inline::HardBreak => true,
+        Inline::WikiLink { text, .. } => text_mode && is_plain_inlines(text),
+        _ => false,
+    })
 }
 
 /// Extract the plain-text content of a frontmatter value (used for section-name matching).
@@ -1244,6 +1405,89 @@ mod tests {
         let out = render_typst(&doc, None, &RenderOptions::default());
         assert!(out.contains("= Guide"), "unmatched keeps the chapter in the body");
         assert_eq!(reading_guide_unmatched(&doc), Some("Ghost".to_string()));
+    }
+
+    fn render_wiki(md: &str, mode: crate::WikilinkMode, vault: Option<&str>) -> String {
+        let doc = parse_markdown(md);
+        let opts = RenderOptions { wikilinks: mode, obsidian_vault: vault.map(str::to_string) };
+        render_typst(&doc, None, &opts)
+    }
+
+    const WIKI_MD: &str = "# T\n\n## Intro\n\nSee [[Other Note]], [[Other Note|the alias]], \
+        [[Other Note#Part]], [[#Intro]], [[#intro|back]] and [[#Missing]].\n";
+
+    #[test]
+    fn wikilinks_text_mode_is_the_default_and_drops_brackets() {
+        let doc = parse_markdown(WIKI_MD);
+        let out = render_typst(&doc, None, &RenderOptions::default());
+        assert!(out.contains("See Other Note, the alias, Other Note > Part, Intro, back and Missing."), "{out}");
+        assert!(!out.contains("\\[\\["), "no raw brackets:\n{out}");
+    }
+
+    #[test]
+    fn wikilinks_bold_mode() {
+        let out = render_wiki(WIKI_MD, crate::WikilinkMode::Bold, None);
+        assert!(out.contains("#strong[the alias]"), "{out}");
+        assert!(out.contains("#strong[Other Note > Part]"), "{out}");
+    }
+
+    #[test]
+    fn wikilinks_keep_mode_leaves_them_as_typed() {
+        let out = render_wiki(WIKI_MD, crate::WikilinkMode::Keep, None);
+        assert!(out.contains("\\[\\[Other Note|the alias\\]\\]"), "{out}");
+        assert!(out.contains("\\[\\[Other Note\\#Part\\]\\]"), "{out}");
+    }
+
+    #[test]
+    fn wikilinks_link_mode_links_headings_and_labels_the_target() {
+        let out = render_wiki(WIKI_MD, crate::WikilinkMode::Link, None);
+        // The heading carries a label, and both same-note links (case-insensitive) point at it.
+        let label = out.lines().find(|l| l.starts_with("= Intro <omd-h-")).expect("labelled heading");
+        let name = &label["= Intro <".len()..label.len() - 1];
+        assert!(out.contains(&format!("#link(<{name}>)[Intro]")), "{out}");
+        assert!(out.contains(&format!("#link(<{name}>)[back]")), "{out}");
+        // A missing heading and (without a vault) other notes degrade to plain text.
+        assert!(out.contains("and Missing."), "{out}");
+        assert!(out.contains("See Other Note, the alias,"), "{out}");
+        assert!(!out.contains("obsidian://"), "{out}");
+    }
+
+    #[test]
+    fn wikilinks_link_mode_with_vault_builds_obsidian_urls() {
+        let out = render_wiki(WIKI_MD, crate::WikilinkMode::Link, Some("My Vault"));
+        assert!(out.contains("#link(\"obsidian://open?vault=My%20Vault&file=Other%20Note\")[Other Note]"), "{out}");
+        assert!(out.contains("file=Other%20Note%23Part\")[Other Note > Part]"), "{out}");
+        assert!(out.contains("[the alias]"));
+    }
+
+    #[test]
+    fn wikilinks_only_first_duplicate_heading_is_labelled_and_hoisted_ones_are_not() {
+        let md = "---\ntitle: T\nreading-guide: Guide\n---\n\n## Guide\n\nSee [[#Same]].\n\n\
+                  ## Same\n\none\n\n## Same\n\ntwo\n";
+        let out = render_wiki(md, crate::WikilinkMode::Link, None);
+        // One label on the first "Same" heading plus the one link that uses it.
+        assert_eq!(out.matches("<omd-h-").count(), 2, "{out}");
+        assert_eq!(out.matches("= Same").count(), 2);
+        assert_eq!(out.lines().filter(|l| l.starts_with("= Same <")).count(), 1, "{out}");
+        // The hoisted section itself is never a link target.
+        let md2 = "---\ntitle: T\nreading-guide: Guide\n---\n\n## Guide\n\ntext\n\n## Body\n\n[[#Guide]]\n";
+        let out2 = render_wiki(md2, crate::WikilinkMode::Link, None);
+        assert!(!out2.contains("#link(<"), "link to a hoisted heading must be plain text:\n{out2}");
+    }
+
+    #[test]
+    fn wikilinks_in_frontmatter_stay_plain_strings_in_text_mode() {
+        let md = "---\ntitle: T\nauthor: \"[[Jane Doe]]\"\n---\n\nbody\n";
+        let out = render_wiki(md, crate::WikilinkMode::Text, None);
+        assert!(out.contains("#let author = \"Jane Doe\""), "{out}");
+    }
+
+    #[test]
+    fn wikilinks_in_code_are_left_alone_and_images_still_work() {
+        let md = "`[[Not a link]]`\n\n```\n[[Nor this]]\n```\n\n![[pic.png]]\n";
+        let out = render_wiki(md, crate::WikilinkMode::Text, None);
+        assert!(out.contains("[[Not a link]]") && out.contains("[[Nor this]]"), "{out}");
+        assert!(out.contains("pic.png"), "{out}");
     }
 
     #[test]

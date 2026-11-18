@@ -22,6 +22,7 @@ pub fn parse_markdown(input: &str) -> Document {
     options.extension.strikethrough = true;
     options.extension.math_dollars = true;
     options.extension.footnotes = true;
+    options.extension.wikilinks_title_after_pipe = true;
 
     let root = parse_document(&arena, body, &options);
 
@@ -239,6 +240,7 @@ fn parse_inline_markdown(s: &str) -> Vec<Inline> {
     let mut options = Options::default();
     options.extension.strikethrough = true;
     options.extension.math_dollars = true;
+    options.extension.wikilinks_title_after_pipe = true;
     let root = parse_document(&arena, s, &options);
     let empty: FootnoteMap = HashMap::new();
     root.children()
@@ -458,6 +460,12 @@ fn parse_inline_node<'a>(node: &'a AstNode<'a>, out: &mut Vec<Inline>, footnotes
             drop(val);
             out.push(Inline::Link { text: parse_inlines(node.children(), footnotes), url });
         }
+        NodeValue::WikiLink(w) => {
+            let url = w.url.clone();
+            drop(val);
+            let title = parse_inlines(node.children(), footnotes);
+            out.push(make_wikilink(&url, title));
+        }
         NodeValue::Image(link) => {
             let src = link.url.clone();
             drop(val);
@@ -485,6 +493,36 @@ fn parse_inline_node<'a>(node: &'a AstNode<'a>, out: &mut Vec<Inline>, footnotes
     }
 }
 
+/// Build an [`Inline::WikiLink`] from comrak's wikilink destination and title.
+///
+/// comrak (title-after-pipe mode) gives `url` = the part before `|` and the
+/// children = the alias, or the whole `url` text when there is no alias. When
+/// there is no alias the display text is derived the way Obsidian shows it:
+/// `Note`, `Heading`, or `Note > Heading`.
+fn make_wikilink(url: &str, title: Vec<Inline>) -> Inline {
+    let (target, fragment) = match url.split_once('#') {
+        Some((t, f)) => (t.trim().to_string(), Some(f.trim().to_string())),
+        None => (url.trim().to_string(), None),
+    };
+    let aliased = collect_inline_text(&title) != url;
+    let text = if aliased {
+        title
+    } else {
+        // Last `#` segment is the heading; a `^block` reference is not shown.
+        let heading = fragment.as_deref()
+            .map(|f| f.rsplit('#').next().unwrap_or(f).trim())
+            .filter(|h| !h.is_empty() && !h.starts_with('^'));
+        let shown = match (target.is_empty(), heading) {
+            (false, Some(h)) => format!("{} > {}", target, h),
+            (false, None) => target.clone(),
+            (true, Some(h)) => h.to_string(),
+            (true, None) => url.to_string(),
+        };
+        vec![Inline::Text(shown)]
+    };
+    Inline::WikiLink { target, fragment, text, aliased }
+}
+
 pub fn collect_inline_text(inlines: &[Inline]) -> String {
     let mut s = String::new();
     for inline in inlines {
@@ -492,6 +530,7 @@ pub fn collect_inline_text(inlines: &[Inline]) -> String {
             Inline::Text(t) => s.push_str(t),
             Inline::Bold(inner) | Inline::Italic(inner) => s.push_str(&collect_inline_text(inner)),
             Inline::Code(t) => s.push_str(t),
+            Inline::WikiLink { text, .. } => s.push_str(&collect_inline_text(text)),
             Inline::SoftBreak => s.push(' '),
             Inline::HardBreak => s.push('\n'),
             _ => {}
