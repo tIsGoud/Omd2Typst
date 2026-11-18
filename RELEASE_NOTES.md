@@ -1,5 +1,36 @@
 # Release Notes
 
+## v0.14.0 — Wikilink conversion
+
+**Wikilinks are converted.** `[[Note]]`, `[[Note|alias]]`, `[[Note#Heading]]`,
+`[[#Heading]]` and block references (`[[Note#^id]]`) no longer appear as literal
+brackets in the output. A new option chooses how they render:
+
+| Mode | Result |
+|------|--------|
+| `text` (default) | The display text only: the alias, or `Note`, `Heading`, `Note > Heading`. |
+| `bold` | The display text in bold. |
+| `link` | Real links (see below). |
+| `keep` | The link as typed, brackets included. |
+
+CLI: `--wikilinks text|bold|link|keep` and `--obsidian-vault NAME`.
+
+**Link mode.** `[[#Heading]]` becomes an internal link to that heading in the
+PDF (case-insensitive, first matching heading wins). Links to other notes become
+`obsidian://open?vault=…&file=…` links, but only when a vault name is given
+(`--obsidian-vault`; the plugin supplies it automatically). Without a vault name,
+and for a heading that does not exist, the display text is shown as plain text.
+The vault name is stored in the PDF. Links use the template's accent colour; the
+built-in template uses dark navy `#1e3a5f`.
+
+Wikilinks in code and in frontmatter values stay plain text. Only top-level
+headings of the document can be link targets.
+
+The WASM `render_to_typst` takes two new optional arguments: `wikilinks` and
+`obsidian_vault`.
+
+---
+
 ## v0.13.0 — `reading-guide` frontmatter key
 
 **Reading guide page.** A new `reading-guide` frontmatter key names an H2 section
