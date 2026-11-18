@@ -41,19 +41,14 @@ Dit gedeelte geeft een korte inleiding op het document.
 
 ## Tekstvoorbeelden
 
-Reguliere tekst.
-
-\*\*Vetgedrukte tekst\*\* →
-**Vetgedrukte tekst**
-
-\_Cursieve tekst\_ →
-_Cursieve tekst_
+| Omschrijving | Syntax | Resultaat |
+| --- | --- | --- |
+| Vetgedrukte tekst | \*\*Vetgedrukte tekst\*\* | **Vetgedrukte tekst** |
+| Cursieve tekst | \_Cursieve tekst\_ | _Cursieve tekst_ |
+| Inline code | dit is \`voorbeeld\` tekst | dit is `voorbeeld` tekst |
 
 \> "Citaat" →
 > "Citaat: Lorem ipsum dolor sit amet, consectetur adipiscing elit, sed do eiusmod tempor incididunt ut labore et dolore magna aliqua." – Lorem Ipsum
-
-\`Inline code\` →
-`tekst tussen backticks`
 
 Obsidian commentaar (\%\%Obsidian commentaar\%\% ) staat op de regel hieronder, in de uitvoer van Omd2Typst is deze verwijderd.
 
@@ -72,27 +67,23 @@ Nog een regel tekst.
 
 ## Doorhalen, markeren, super- en subscript
 
-`~~doorgehaalde~~ tekst` →
-~~doorgehaalde~~ tekst
-
-` ==gemarkeerde== tekst` →
-==gemarkeerde== tekst
-
-Superscript (HTML-hack) E = mc\<sup\>2\</sup\> →
-Superscript: E = mc<sup>2</sup>
-
-Subscript: H\<sub\>2\</sub\>O →
-Subscript: H<sub>2</sub>O
+| Markdown | Resultaat |
+| --- | --- |
+| `~~doorgehaalde tekst~~` | ~~doorgehaalde~~ tekst |
+| `Volgende tekst is ==gemarkeerde== tekst.` | Volgende tekst is ==gemarkeerde== tekst. |
+| Superscript (HTML-hack) E = mc\<sup\>2\</sup\> | Superscript: E = mc<sup>2</sup> |
+| Subscript: H\<sub\>2\</sub\>O | Subscript: H<sub>2</sub>O |
 
 ## Wiskunde
 
-Inline wiskunde: \$E = m c^2$ en $a^2 + b^2 = c^2$. →
-Inline wiskunde: $E = m c^2$ en $a^2 + b^2 = c^2$.
+Inline wiskunde gebruikt één '$', met '\$\$' wordt de formule gecentreerd op de volgende regel geplaatst.
 
-
-Weergaveformule: \$\$sum_(k=1)^n k = (n(n+1)) / 2\$\$ →
-
-Weergaveformule: $$sum_(k=1)^n k = (n(n+1)) / 2$$
+| Markdown | Resultaat |
+| ------------------------------------------------- | ---------------------------------------------- |
+| Wiskunde \$E = m c^2$ en $a^2 + b^2 = c^2\$ inline. | Wiskunde $E = m c^2$ en $a^2 + b^2 = c^2$ inline. |
+| Nieuwe regel: \$$E = m c^2$ en $a^2 + b^2 = c^2\$\$. | $$E = m c^2$ en $a^2 + b^2 = c^2$$ |
+| Nieuwe regel: \$\$sum_(k=1)^n k = (n(n+1)) / 2\$\$ | $$sum_(k=1)^n k = (n(n+1)) / 2$$ |
+| Nieuwe regel: \$\$log(x)\$$ | $$log(x)$$ |
 
 ## Lijsten met opsommingstekens
 
@@ -386,16 +377,16 @@ Obsidian wikilinks worden weergegeven volgens de optie `--wikilinks` van de CLI
 (of de instelling *Wikilinks* van de plugin): `text` (standaard), `bold`, `link`
 of `keep`.
 
-| Syntax | Voorbeeld |
-| ------ | --------- |
-| Notitie | [[Andere notitie]] |
-| Notitie met alias | [[Andere notitie\|een ander label]] |
-| Notitie en kop | [[Andere notitie#Een kop]] |
-| Kop in dit document | [[#Tabel]] |
-| Kop in dit document met alias | [[#Voetnoten\|ga naar de voetnoten]] |
-| Kop in dit document, andere hoofdletters | [[#tekstvoorbeelden]] |
-| Kop die niet bestaat | [[#Bestaat niet]] |
-| Blokverwijzing | [[Andere notitie#^blok-id]] |
+| Syntax | Omschrijving | Resultaat |
+| ------ | ----------- | ------ |
+| \[\[Een notitie\]\] | Notitie | [[Een notitie]] |
+| \[\[Een notitie\\\|slechts een label\]\] | Notitie met alias | [[Een notitie\|slechts een label]] |
+| \[\[Een notitie#Een kop\]\] | Notitie en kop | [[Een notitie#Een kop]] |
+| \[\[\#Tabel\]\] | Kop in dit document | [[#Tabel]] |
+| \[\[\#Voetnoten\|ga naar voetnoten\]\] | Kop in dit document met alias | [[#Voetnoten\|ga naar voetnoten]] |
+| \[\[\#tekstvoorbeelden\]\] | Kop in dit document, andere hoofdletters | [[#tekstvoorbeelden]] |
+| \[\[\#Bestaat niet\]\] | Kop die niet bestaat | [[#Bestaat niet]] |
+| \[\[Andere notitie#^blok-id\]\] | Blokverwijzing | [[Andere notitie#^blok-id]] |
 
 Wikilinks werken ook in lopende tekst, bijvoorbeeld in een zin die naar
 [[Andere notitie|een andere notitie]] verwijst en daarna verdergaat, in

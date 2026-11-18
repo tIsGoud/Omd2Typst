@@ -45,19 +45,14 @@ This section gives a brief introduction to the document.
 
 ## Text examples
 
-Regular text.
-
-\*\*Bold text\*\* →
-**Bold text**
-
-\_Italic text\_ →
-_Italic text_
+| Description  | Syntax                  | Result                 |
+| ------------ | ----------------------- | ---------------------- |
+| Regular text | \*\*Bold text\*\*       | **Bold text**          |
+| Italic text  | \_Italic text\_         | _Italic text_          |
+| Inline code  | this is \`sample\` text | this is `sample` text  |
 
 \> "Quote" →
 > "Quote: Lorem ipsum dolor sit amet, consectetur adipiscing elit, sed do eiusmod tempor incididunt ut labore et dolore magna aliqua." – Lorem Ipsum
-
-\`Inline code\` →
-`text between backticks`
 
 The Obsidian comment (\%\%Obsidian comment\%\%) is on the line below; in the omd2typst output it has been removed.
 
@@ -336,11 +331,11 @@ Obsidian wikilinks are rendered according to the `--wikilinks` option of the CLI
 
 | Syntax | Description | Result |
 | ------ | ----------- | ------ |
-| \[\[Another Note\]\] | Note | [[Another Note]] |
-| \[\[Another Note\\\|a different label\]\] | Note with alias | [[Another Note\|a different label]] |
-| \[\[Another Note#Some heading\]\] | Note and heading | [[Another Note#Some heading]] |
+| \[\[A Note\]\] | Note | [[A Note]] |
+| \[\[A Note\\\|just a label\]\] | Note with alias | [[A Note\|just a label]] |
+| \[\[A Note#Some heading\]\] | Note and heading | [[A Note#Some heading]] |
 | \[\[\#Table\]\] | Heading in this document | [[#Table]] |
-| \[\[\#Footnotes\|jump to the footnotes\]\] | Heading in this document with alias | [[#Footnotes\|jump to the footnotes]] |
+| \[\[\#Footnotes\|jump to footnotes\]\] | Heading in this document with alias | [[#Footnotes\|jump to footnotes]] |
 | \[\[\#text examples\]\] | Heading in this document, different case | [[#text examples]] |
 | \[\[\#No such heading\]\] | Heading that does not exist | [[#No such heading]] |
 | \[\[Another Note#^block-id\]\] | Block reference | [[Another Note#^block-id]] |
