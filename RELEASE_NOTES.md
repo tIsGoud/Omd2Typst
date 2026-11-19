@@ -1,5 +1,22 @@
 # Release Notes
 
+## v0.14.1 — Coloured highlights
+
+**Coloured highlights.** Obsidian's highlight colours are supported. A coloured
+dot right after the opening `==` selects the colour: `==🔴text==`, `==🟠text==`,
+`==🟡text==`, `==🟢text==`, `==🔵text==` or `==🟣text==` (red, orange, yellow,
+green, blue, purple). The dot is not shown in the output. Plain `==text==` uses
+Obsidian's default highlight colour (`#fdf1a5`) instead of Typst's default
+yellow, so existing highlights look slightly different. Any other emoji after
+`==` stays part of the text.
+
+**Clearer placeholder for unsupported embeds.** The placeholder (and the CLI
+warning) no longer says "in the CLI": PDFs, note transclusions and audio/video
+embeds are not rendered by the plugin either. Only Obsidian Bases embeds are
+rendered by the plugin.
+
+---
+
 ## v0.14.0 — Wikilink conversion
 
 **Wikilinks are converted.** `[[Note]]`, `[[Note|alias]]`, `[[Note#Heading]]`,
