@@ -131,14 +131,14 @@ fn main() -> Result<()> {
 
     let doc = parse_markdown(&input);
 
-    // Warn about embeds the CLI cannot render (Obsidian Bases, PDFs, note
-    // transclusions, audio/video, …). These are handled only by the Obsidian
-    // plugin; the document shows an inline placeholder for each.
+    // Warn about embeds that cannot be rendered (PDFs, note transclusions,
+    // audio/video, Obsidian Bases — the latter only by the Obsidian plugin);
+    // the document shows an inline placeholder for each.
     for src in collect_unsupported_embeds(&doc) {
         eprintln!(
-            "warning: embed '{}' is not supported by the CLI \
-             (only the Omd2Typst Obsidian plugin can render it); \
-             inserted a placeholder note instead.",
+            "warning: embed '{}' is not supported; \
+             inserted a placeholder note instead \
+             (Obsidian Bases embeds are only rendered by the Omd2Typst Obsidian plugin).",
             src
         );
     }

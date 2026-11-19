@@ -817,7 +817,11 @@ fn render_inline(out: &mut String, inline: &Inline) {
         Inline::Bold(inner) => { out.push('*'); render_inlines(out, inner); out.push('*'); }
         Inline::Italic(inner) => { out.push('_'); render_inlines(out, inner); out.push('_'); }
         Inline::Strikethrough(inner) => { out.push_str("#strike["); render_inlines(out, inner); out.push(']'); }
-        Inline::Highlight(inner)     => { out.push_str("#highlight["); render_inlines(out, inner); out.push(']'); }
+        Inline::Highlight { color, children } => {
+            out.push_str(&format!("#highlight(fill: rgb(\"{}\"))[", color.fill_hex()));
+            render_inlines(out, children);
+            out.push(']');
+        }
         Inline::Superscript(inner)   => { out.push_str("#super["); render_inlines(out, inner); out.push(']'); }
         Inline::Subscript(inner)     => { out.push_str("#sub["); render_inlines(out, inner); out.push(']'); }
         Inline::InlineMath(s)        => out.push_str(&format!("${}$", s)),
@@ -846,16 +850,14 @@ fn render_inline(out: &mut String, inline: &Inline) {
         }
         Inline::Image { src, alt, width } => {
             if is_unsupported_embed(src) {
-                // Non-image embeds — Obsidian "Bases" (`![[x.base]]`), PDFs, note
-                // transclusions, audio/video, etc. — can only be rendered by the
-                // Omd2Typst Obsidian plugin (which pre-processes them before this
-                // engine runs). Reaching here means the engine was handed a raw
-                // non-image embed (e.g. via the CLI). Emit a visible warning
-                // instead of an `image()` call — Typst would otherwise reject the
-                // file with "unknown image format".
+                // Non-image embeds — PDFs, note transclusions, audio/video,
+                // Obsidian "Bases" (`![[x.base]]`, which the plugin renders to a
+                // table before this engine runs, so only the CLI gets here), etc.
+                // — cannot become an `image()` call: Typst would reject the file
+                // with "unknown image format". Emit a visible placeholder instead.
                 out.push_str(&format!(
                     "#block(fill: rgb(\"#fff5ea\"), inset: 8pt, radius: 4pt, width: 100%)[\
-                     #text(fill: rgb(\"#b45309\"), weight: \"bold\")[Embed not supported in the CLI:] \
+                     #text(fill: rgb(\"#b45309\"), weight: \"bold\")[Embed not supported:] \
                      #raw({})]",
                     typst_string_val(src),
                 ));
@@ -895,12 +897,12 @@ fn inlines_to_plain_text(inlines: &[Inline]) -> String {
             Inline::Bold(i)
             | Inline::Italic(i)
             | Inline::Strikethrough(i)
-            | Inline::Highlight(i)
             | Inline::Superscript(i)
             | Inline::Subscript(i)
             | Inline::Footnote(i)
             | Inline::Link { text: i, .. }
             | Inline::WikiLink { text: i, .. }    => s.push_str(&inlines_to_plain_text(i)),
+            Inline::Highlight { children, .. }    => s.push_str(&inlines_to_plain_text(children)),
             Inline::Image { alt, .. }             => s.push_str(alt),
             Inline::SoftBreak | Inline::HardBreak => s.push(' '),
         }
@@ -1092,10 +1094,10 @@ fn collect_inline_embeds(inlines: &[Inline], out: &mut Vec<String>) {
             Inline::Bold(children)
             | Inline::Italic(children)
             | Inline::Strikethrough(children)
-            | Inline::Highlight(children)
             | Inline::Footnote(children)
             | Inline::Superscript(children)
             | Inline::Subscript(children) => collect_inline_embeds(children, out),
+            Inline::Highlight { children, .. } => collect_inline_embeds(children, out),
             Inline::Link { text, .. } | Inline::WikiLink { text, .. } => collect_inline_embeds(text, out),
             _ => {}
         }
@@ -1242,13 +1244,37 @@ mod tests {
     }
 
     #[test]
+    fn highlight_colours_from_leading_dot() {
+        let cases = [
+            ("==plain==", "#fdf1a5", "plain"),
+            ("==🔴text==", "#efbfbb", "text"),
+            ("==🟠text==", "#fae0c3", "text"),
+            ("==🟡text==", "#f2e6bd", "text"),
+            ("==🟢text==", "#d0efcc", "text"),
+            ("==🔵text==", "#b8ccf2", "text"),
+            ("==🟣text==", "#e3ccf3", "text"),
+        ];
+        for (md, fill, body) in cases {
+            let out = render_typst(&parse_markdown(&format!("{md}\n")), None, &RenderOptions::default());
+            let want = format!("#highlight(fill: rgb(\"{fill}\"))[{body}]");
+            assert!(out.contains(&want), "Expected {want} for {md}:\n{out}");
+        }
+    }
+
+    #[test]
+    fn highlight_unknown_emoji_stays_text() {
+        let out = render_typst(&parse_markdown("==⚫text==\n"), None, &RenderOptions::default());
+        assert!(out.contains("#highlight(fill: rgb(\"#fdf1a5\"))[⚫text]"), "{out}");
+    }
+
+    #[test]
     fn base_embed_emits_warning_not_image() {
         // A `![[x.base]]` embed must NOT become an image() call (Typst rejects
         // `.base` as an image format); it should render a visible warning.
         let doc = parse_markdown("![[_assets/test.base]]\n");
         let out = render_typst(&doc, None, &RenderOptions::default());
         assert!(
-            out.contains("Embed not supported in the CLI:"),
+            out.contains("Embed not supported:"),
             "Expected embed warning in output:\n{out}"
         );
         assert!(
@@ -1265,7 +1291,7 @@ mod tests {
             let doc = parse_markdown(&format!("![[{src}]]\n"));
             let out = render_typst(&doc, None, &RenderOptions::default());
             assert!(
-                out.contains("Embed not supported in the CLI:"),
+                out.contains("Embed not supported:"),
                 "Expected warning for {src}:\n{out}"
             );
             assert!(
@@ -1515,7 +1541,7 @@ mod tests {
         let doc = parse_markdown("![[Some Note.md]]\n");
         let out = render_typst(&doc, None, &RenderOptions::default());
         assert!(
-            out.contains("Embed not supported in the CLI:"),
+            out.contains("Embed not supported:"),
             "spaced .md embed should warn, not render as text:\n{out}"
         );
         assert_eq!(collect_unsupported_embeds(&doc), vec!["Some Note.md"]);

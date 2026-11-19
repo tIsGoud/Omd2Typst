@@ -4,7 +4,7 @@ mod renderer;
 
 pub use ast::{
     Block, ColAlign, Document, FrontmatterValue,
-    Inline, ListItem, TableRow,
+    HighlightColor, Inline, ListItem, TableRow,
 };
 pub use parser::parse_markdown;
 pub use renderer::{

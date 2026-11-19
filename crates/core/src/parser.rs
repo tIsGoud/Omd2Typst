@@ -652,7 +652,8 @@ fn make_list_item(mut blocks: Vec<Block>) -> ListItem {
 
 static MARKED_TEXT_RE: OnceLock<Regex> = OnceLock::new();
 
-/// Splits a raw text node on `==highlight==` markers, pushing `Inline::Highlight`
+/// Splits a raw text node on `==highlight==` markers (optionally `==🔴highlight==`
+/// with a coloured dot), pushing `Inline::Highlight`
 /// variants into `out`. Subscript is handled via HTML `<sub>` tags in `parse_inlines`.
 fn parse_marked_text(text: &str, out: &mut Vec<Inline>) {
     let re = MARKED_TEXT_RE.get_or_init(|| Regex::new(r"==([^=\n]+)==").unwrap());
@@ -663,7 +664,12 @@ fn parse_marked_text(text: &str, out: &mut Vec<Inline>) {
             out.push(Inline::Text(text[last..m.start()].to_string()));
         }
         if let Some(h) = cap.get(1) {
-            out.push(Inline::Highlight(vec![Inline::Text(h.as_str().to_string())]));
+            let raw = h.as_str();
+            let (color, text) = match raw.chars().next().and_then(HighlightColor::from_dot) {
+                Some(color) => (color, raw.chars().skip(1).collect::<String>()),
+                None => (HighlightColor::Default, raw.to_string()),
+            };
+            out.push(Inline::Highlight { color, children: vec![Inline::Text(text)] });
         }
         last = m.end();
     }

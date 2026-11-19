@@ -1,10 +1,52 @@
+/// Colour of a `==highlight==`. A leading coloured dot (`==🔴text==`) selects one
+/// of Obsidian's highlight colours; without a dot the default highlight is used.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum HighlightColor {
+    #[default]
+    Default,
+    Red,
+    Orange,
+    Yellow,
+    Green,
+    Blue,
+    Purple,
+}
+
+impl HighlightColor {
+    /// Maps the coloured dot that starts a highlight to its colour.
+    pub fn from_dot(c: char) -> Option<Self> {
+        Some(match c {
+            '🔴' => Self::Red,
+            '🟠' => Self::Orange,
+            '🟡' => Self::Yellow,
+            '🟢' => Self::Green,
+            '🔵' => Self::Blue,
+            '🟣' => Self::Purple,
+            _ => return None,
+        })
+    }
+
+    /// Background colour, sampled from Obsidian's highlight colours.
+    pub fn fill_hex(self) -> &'static str {
+        match self {
+            Self::Default => "#fdf1a5",
+            Self::Red => "#efbfbb",
+            Self::Orange => "#fae0c3",
+            Self::Yellow => "#f2e6bd",
+            Self::Green => "#d0efcc",
+            Self::Blue => "#b8ccf2",
+            Self::Purple => "#e3ccf3",
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub enum Inline {
     Text(String),
     Bold(Vec<Inline>),
     Italic(Vec<Inline>),
     Strikethrough(Vec<Inline>),
-    Highlight(Vec<Inline>),
+    Highlight { color: HighlightColor, children: Vec<Inline> },
     InlineMath(String),
     DisplayMath(String),
     Footnote(Vec<Inline>),
