@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="Omd2Typst-logo.png" alt="Omd2Typst logo" width="320">
+</p>
+
 # Omd2Typst
 
 Convert Obsidian Markdown notes to publication-quality PDFs via Typst.
@@ -451,6 +455,30 @@ crates/
 ```
 
 The AST is intentionally minimal — only the constructs that have a direct Typst equivalent are represented. Everything else is either preprocessed before parsing (Obsidian wikilink images) or silently ignored.
+
+---
+
+## CLI or Obsidian plugin?
+
+Both use the same conversion engine (`omd2typst-core`), so the Markdown they understand and the Typst they produce are the same. They differ in how they are run and in what surrounds the conversion.
+
+| | CLI | Obsidian plugin |
+|---|---|---|
+| **Runs as** | Command-line program (macOS, Linux, Windows) | Obsidian desktop plugin (not on mobile) |
+| **Markdown → Typst** | ✓ | ✓ (engine compiled to WASM) |
+| **Output** | `.typ` or PDF | `.typ` or PDF |
+| **PDF generation** | Built in (Typst embedded, no extra install) | Needs the system `typst` command; without it only `.typ` export works |
+| **Templates** | `--template file.typ` | Template list in the settings, default template, picker at export time |
+| **Output location** | Any path you give | Same folder as the note, a fixed folder, or asked each time |
+| **Wikilinks** (`text`, `bold`, `link`, `keep`) | `--wikilinks`; add `--obsidian-vault NAME` for links to other notes | *Wikilinks* setting; the vault name is filled in automatically |
+| **Images** | Paths are resolved from the current directory | Resolved like Obsidian does: relative to the note, vault paths and shortest-path links |
+| **Mermaid diagrams** | — | ✓ (rendered by Obsidian) |
+| **Obsidian Bases embeds** (`![[x.base]]`) | Placeholder | ✓ (rendered as a table) |
+| **PDF, note and audio/video embeds** | Placeholder | Placeholder |
+| **Frontmatter template** | — | *Insert frontmatter* command |
+| **Scripts, CI/CD** | ✓ | — |
+
+Features that only exist in the plugin depend on Obsidian itself (Mermaid, Bases, the vault), so the CLI cannot offer them.
 
 ---
 
