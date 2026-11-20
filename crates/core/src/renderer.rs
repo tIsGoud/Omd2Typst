@@ -1,5 +1,5 @@
 use crate::ast::*;
-use crate::{RenderOptions, WikilinkMode};
+use crate::{MathMode, RenderOptions, WikilinkMode};
 use std::cell::RefCell;
 use std::collections::HashMap;
 
@@ -11,6 +11,11 @@ pub fn render_typst(doc: &Document, template: Option<&str>, options: &RenderOpti
     // Wikilink rendering needs document-wide state (mode, vault, heading labels)
     // inside the free `render_*` functions. It is carried in a thread-local that
     // lives only for the duration of this call.
+    MATH_CTX.with(|c| {
+        let mut c = c.borrow_mut();
+        c.mode = options.math;
+        c.failures.clear();
+    });
     WIKI_CTX.with(|c| {
         *c.borrow_mut() = WikiCtx {
             mode: options.wikilinks,
@@ -696,6 +701,45 @@ fn render_checkbox_list(out: &mut String, items: &[ListItem], level_offset: u8) 
 }
 
 // ---------------------------------------------------------------------------
+// Math
+// ---------------------------------------------------------------------------
+
+#[derive(Default)]
+struct MathCtx {
+    mode: MathMode,
+    /// Formulas the LaTeX converter could not handle (passed through as typed).
+    failures: Vec<String>,
+}
+
+thread_local! {
+    static MATH_CTX: RefCell<MathCtx> = RefCell::new(MathCtx::default());
+}
+
+/// Formulas that could not be converted from LaTeX during the last
+/// [`render_typst`] call on this thread, as `formula: reason`. Such formulas
+/// are passed through to Typst as typed. The CLI uses this to warn on stderr.
+pub fn take_math_failures() -> Vec<String> {
+    MATH_CTX.with(|c| std::mem::take(&mut c.borrow_mut().failures))
+}
+
+/// The formula as Typst math: converted from LaTeX unless the mode is `typst`.
+fn math_source(s: &str) -> String {
+    MATH_CTX.with(|c| {
+        let mut c = c.borrow_mut();
+        if c.mode == MathMode::Typst {
+            return s.to_string();
+        }
+        match crate::math::latex_to_typst(s) {
+            Ok(t) => t,
+            Err(e) => {
+                c.failures.push(format!("{}: {}", s.trim(), e));
+                s.to_string()
+            }
+        }
+    })
+}
+
+// ---------------------------------------------------------------------------
 // Wikilinks
 // ---------------------------------------------------------------------------
 
@@ -826,8 +870,8 @@ fn render_inline(out: &mut String, inline: &Inline) {
         // Helvetica Neue take the script size from their own metrics and come out tiny.
         Inline::Superscript(inner)   => { out.push_str("#super(typographic: false, size: 0.7em)["); render_inlines(out, inner); out.push(']'); }
         Inline::Subscript(inner)     => { out.push_str("#sub(typographic: false, size: 0.7em)["); render_inlines(out, inner); out.push(']'); }
-        Inline::InlineMath(s)        => out.push_str(&format!("${}$", s)),
-        Inline::DisplayMath(s)       => out.push_str(&format!("\n$ {} $\n", s)),
+        Inline::InlineMath(s)        => out.push_str(&format!("${}$", math_source(s))),
+        Inline::DisplayMath(s)       => out.push_str(&format!("\n$ {} $\n", math_source(s))),
         Inline::Footnote(inner)      => { out.push_str("#footnote["); render_inlines(out, inner); out.push(']'); }
         Inline::Code(c) => {
             let max_run = c.chars()
@@ -1271,6 +1315,30 @@ mod tests {
     }
 
     #[test]
+    fn latex_math_is_converted_by_default() {
+        let out = render_typst(&parse_markdown("Log: $\\log$ and $$\\frac{a}{b}$$\n"), None, &RenderOptions::default());
+        assert!(out.contains("$log$"), "{out}");
+        assert!(out.contains("$ a/b $"), "{out}");
+    }
+
+    #[test]
+    fn typst_math_mode_passes_formulas_through() {
+        let opts = RenderOptions { math: MathMode::Typst, ..Default::default() };
+        let out = render_typst(&parse_markdown("$sum_(k=1)^n k$ and $log(x)$\n"), None, &opts);
+        assert!(out.contains("$sum_(k=1)^n k$"), "{out}");
+        assert!(out.contains("$log(x)$"), "{out}");
+    }
+
+    #[test]
+    fn failed_latex_conversion_falls_back_and_is_reported() {
+        let out = render_typst(&parse_markdown("$\\frac{a$\n"), None, &RenderOptions::default());
+        assert!(out.contains("$\\frac{a$"), "{out}");
+        let failures = take_math_failures();
+        assert_eq!(failures.len(), 1, "{failures:?}");
+        assert!(take_math_failures().is_empty());
+    }
+
+    #[test]
     fn highlight_unknown_emoji_stays_text() {
         let out = render_typst(&parse_markdown("==⚫text==\n"), None, &RenderOptions::default());
         assert!(out.contains("#highlight(fill: rgb(\"#fdf1a5\"))[⚫text]"), "{out}");
@@ -1444,7 +1512,7 @@ mod tests {
 
     fn render_wiki(md: &str, mode: crate::WikilinkMode, vault: Option<&str>) -> String {
         let doc = parse_markdown(md);
-        let opts = RenderOptions { wikilinks: mode, obsidian_vault: vault.map(str::to_string) };
+        let opts = RenderOptions { wikilinks: mode, obsidian_vault: vault.map(str::to_string), ..Default::default() };
         render_typst(&doc, None, &opts)
     }
 

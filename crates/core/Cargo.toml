@@ -9,3 +9,4 @@ description = "Core Markdown→Typst conversion library for omd2typst"
 [dependencies]
 comrak = "0.28"
 regex = "1.10"
+tex2typst-rs = "0.4.1"

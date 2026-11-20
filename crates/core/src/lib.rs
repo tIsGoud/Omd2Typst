@@ -1,4 +1,5 @@
 pub mod ast;
+mod math;
 mod parser;
 mod renderer;
 
@@ -9,6 +10,7 @@ pub use ast::{
 pub use parser::parse_markdown;
 pub use renderer::{
     appendix_unmatched, collect_unsupported_embeds, numbering_unmatched, reading_guide_unmatched, render_typst,
+    take_math_failures,
     BUILTIN_TEMPLATE,
 };
 
@@ -41,9 +43,32 @@ impl WikilinkMode {
     }
 }
 
+/// Syntax of the `$…$` and `$$…$$` formulas in the Markdown.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum MathMode {
+    /// LaTeX, as Obsidian renders it (default); converted to Typst math.
+    #[default]
+    Latex,
+    /// Typst math syntax, passed through unchanged.
+    Typst,
+}
+
+impl MathMode {
+    /// Parse `latex` or `typst` (case-insensitive).
+    pub fn parse(s: &str) -> Option<Self> {
+        match s.trim().to_ascii_lowercase().as_str() {
+            "latex" => Some(Self::Latex),
+            "typst" => Some(Self::Typst),
+            _ => None,
+        }
+    }
+}
+
 /// Rendering options.
 #[derive(Default, Clone, Debug)]
 pub struct RenderOptions {
+    /// Syntax of math formulas. Default: [`MathMode::Latex`].
+    pub math: MathMode,
     /// How wikilinks are rendered. Default: [`WikilinkMode::Text`].
     pub wikilinks: WikilinkMode,
     /// Obsidian vault name used to build `obsidian://open` links to other notes

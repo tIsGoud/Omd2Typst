@@ -2,7 +2,7 @@ mod world;
 
 use omd2typst_core::{
     appendix_unmatched, collect_unsupported_embeds, numbering_unmatched, parse_markdown, reading_guide_unmatched,
-    render_typst, RenderOptions, WikilinkMode,
+    render_typst, take_math_failures, MathMode, RenderOptions, WikilinkMode,
     BUILTIN_TEMPLATE,
 };
 
@@ -20,6 +20,7 @@ use std::fs;
     omd2typst notes.md output.pdf
     omd2typst notes.md output.pdf --template my-template.typ
     omd2typst notes.md output.pdf --wikilinks link --obsidian-vault \"My Vault\"
+    omd2typst notes.md output.pdf --math typst
     omd2typst --export-template my-template.typ"
 )]
 struct Cli {
@@ -51,10 +52,30 @@ struct Cli {
     #[arg(long, value_name = "NAME")]
     obsidian_vault: Option<String>,
 
+    /// Syntax of `$…$` / `$$…$$` formulas: `latex` (as Obsidian renders it;
+    /// converted to Typst math) or `typst` (Typst math, passed through).
+    #[arg(long, value_enum, default_value_t = Math::Latex)]
+    math: Math,
+
     /// Write the built-in styling to FILE as a Typst template and exit.
     /// Edit the file, then pass it back with --template.
     #[arg(long, value_name = "FILE")]
     export_template: Option<String>,
+}
+
+#[derive(ValueEnum, Clone, Copy)]
+enum Math {
+    Latex,
+    Typst,
+}
+
+impl From<Math> for MathMode {
+    fn from(m: Math) -> Self {
+        match m {
+            Math::Latex => MathMode::Latex,
+            Math::Typst => MathMode::Typst,
+        }
+    }
 }
 
 #[derive(ValueEnum, Clone, Copy)]
@@ -178,10 +199,20 @@ fn main() -> Result<()> {
         &doc,
         cli.template.as_deref(),
         &RenderOptions {
+            math: cli.math.into(),
             wikilinks: cli.wikilinks.into(),
             obsidian_vault: cli.obsidian_vault.clone(),
         },
     );
+
+    // Formulas the LaTeX converter could not handle are passed through as typed.
+    for failure in take_math_failures() {
+        eprintln!(
+            "warning: math: could not convert LaTeX formula ({}); \
+             passed through as typed. Use --math typst for Typst math syntax.",
+            failure
+        );
+    }
 
     match format {
         Format::Typst => {

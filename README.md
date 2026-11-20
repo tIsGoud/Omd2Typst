@@ -107,6 +107,9 @@ omd2typst input.md output.pdf --wikilinks bold
 # Real links: [[#Heading]] jumps to that heading, other notes open in Obsidian
 omd2typst input.md output.pdf --wikilinks link --obsidian-vault "My Vault"
 
+# Math: LaTeX (default, as Obsidian renders it) or Typst syntax
+omd2typst input.md output.pdf --math typst
+
 # Export the built-in template as a starting point for customisation
 omd2typst --export-template my-template.typ
 ```
@@ -329,8 +332,8 @@ set text(font: ("Your Serif Font", "Georgia", "Times New Roman", "Liberation Ser
 | Checkbox list | `- [ ]`, `- [x]`, `- [i]` | 10 emoji variants — see table below |
 | Superscript | `<sup>text</sup>` | HTML inline; also renders in Obsidian preview |
 | Subscript | `<sub>text</sub>` | HTML inline; also renders in Obsidian preview |
-| Inline math | `$formula$` | Typst math syntax |
-| Display math | `$$formula$$` | Centred display block |
+| Inline math | `$formula$` | LaTeX by default (converted to Typst); Typst syntax with `--math typst` — see *Math notation* |
+| Display math | `$$formula$$` | Centred display block; matrices (`pmatrix`, `bmatrix`, …) and `cases` are supported |
 | Footnotes | `[^1]` / `[^1]: text` | Rendered as Typst footnotes (bottom of the page) |
 | Thematic break | `---` | Full-width horizontal rule |
 
@@ -405,25 +408,48 @@ The following Obsidian and Markdown features are **not** handled. They will eith
 | Multi-file documents | Each run converts a single `.md` file |
 | Definition lists | Not part of CommonMark; no comrak extension available |
 | Subscript `~text~` / Superscript `^text^` | Not native to Obsidian; use `<sub>`/`<sup>` HTML instead |
-| LaTeX math | Typst uses its own math syntax; formulas must be written in Typst notation |
+| Some LaTeX math commands | The converter covers common LaTeX (fractions, roots, sums, Greek letters, matrices, `cases`, …); a formula it cannot convert is passed through as typed and the CLI warns |
 
 ---
 
 ## Math notation
 
-Math content is passed directly to Typst. Typst uses **its own math notation**, which is similar to but not identical to LaTeX.
+Formulas between `$…$` (inline) and `$$…$$` (display) are written in **LaTeX**, the same notation Obsidian renders. The engine converts them to Typst math, so a note that looks right in Obsidian also looks right in the PDF.
 
 ```markdown
 Inline:  $a^2 + b^2 = c^2$
 
 Display:
-$$sum_(k=1)^n k = (n(n+1)) / 2$$
+$$\sum_{k=1}^n k = \frac{n(n+1)}{2}$$
+
+$$f(x) = \begin{cases} 1 & x > 0 \\ 0 & \text{otherwise} \end{cases}$$
 ```
 
-Common differences from LaTeX:
+If a formula cannot be converted (for example `\frac{a` with an unclosed brace), it is passed through to Typst as typed, and the CLI prints a warning.
+
+### Typst math syntax
+
+Typst has its own math notation. To write formulas in it, choose the Typst syntax:
+
+```bash
+omd2typst notes.md output.pdf --math typst
+```
+
+In the Obsidian plugin this is the *Math syntax* setting. The choice applies to the whole document — formulas of both kinds cannot be mixed, because some look the same but mean different things (`a/b` is a slash in LaTeX and a fraction in Typst). Notes written in Typst math show incorrectly in Obsidian's own preview, which is why LaTeX is the default.
+
+An example in Typst syntax is in `input/input-en-typst-math.md`.
+
+Common differences between the two notations:
 
 | LaTeX | Typst |
 |---|---|
+| `\frac{a}{b}` | `a/b` or `frac(a, b)` |
+| `\sqrt{x}` | `sqrt(x)` |
+| `\sum_{i=1}^{n}` | `sum_(i=1)^n` |
+| `\alpha`, `\beta` | `alpha`, `beta` |
+| `\times` | `times` |
+
+---|---|
 | `\frac{a}{b}` | `a/b` or `frac(a, b)` |
 | `\sqrt{x}` | `sqrt(x)` |
 | `\sum_{i=1}^{n}` | `sum_(i=1)^n` |
