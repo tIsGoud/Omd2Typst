@@ -1,5 +1,28 @@
 # Release Notes
 
+## v0.15.0 — LaTeX math
+
+**Math is written in LaTeX by default.** Formulas between `$…$` and `$$…$$`
+are now read as LaTeX, the notation Obsidian renders, and converted to Typst
+math. A note that looks right in Obsidian now looks right in the PDF, for
+example `$\log$`, `$$\frac{a}{b}$$`, `$\sqrt{x}$`, `$\alpha$` and
+`$$\sum_{k=1}^n k$$`. Matrices (`pmatrix`, `bmatrix`, `Bmatrix`, `vmatrix`,
+`Vmatrix`) and `cases` are supported.
+
+**Behaviour change.** Notes written in Typst math notation (`sum_(k=1)^n`,
+`log(x)`) must now be exported with `--math typst` (CLI) or the *Math syntax*
+setting (plugin), which passes formulas through unchanged. The choice applies to
+the whole document. `input/input-en-typst-math.md` is an example in Typst syntax.
+
+A formula that cannot be converted is passed through as typed, and the CLI
+prints a warning. An unknown LaTeX command is not detected and then fails in
+Typst as an unknown variable.
+
+The WASM `render_to_typst` takes a new optional `math` argument (`latex` or
+`typst`). Conversion uses the `tex2typst-rs` crate.
+
+---
+
 ## v0.14.2 — Highlight colours and super-/subscript size
 
 **Highlight colours.** The coloured highlights (`==🔴text==` … `==🟣text==`)
