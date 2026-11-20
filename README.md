@@ -313,7 +313,7 @@ set text(font: ("Your Serif Font", "Georgia", "Times New Roman", "Liberation Ser
 | Bold | `**text**` or `__text__` | |
 | Italic | `*text*` or `_text_` | |
 | Strikethrough | `~~text~~` | Obsidian native |
-| Highlight | `==text==` | Obsidian native |
+| Highlight | `==text==`, `==🔴text==` | Obsidian native. A coloured dot right after `==` selects the colour: 🔴 red, 🟠 orange, 🟡 yellow, 🟢 green, 🔵 blue, 🟣 purple. Without a dot the default highlight colour is used |
 | Inline code | `` `code` `` | |
 | Links | `[text](url)` | |
 | Images — standard | `![alt](path)` | |
