@@ -1,5 +1,19 @@
 # Release Notes
 
+## v0.14.2 — Highlight colours and super-/subscript size
+
+**Highlight colours.** The coloured highlights (`==🔴text==` … `==🟣text==`)
+now use a lighter, closer-to-Obsidian palette: red `#f8bcb9`, orange `#ffdfbf`,
+yellow `#f4e5b8`, green `#c8f0c9`, blue `#b3ccf5`, purple `#e8cbf6`. The plain
+`==text==` colour (`#fdf1a5`) is unchanged.
+
+**Superscript and subscript size.** `<sup>` and `<sub>` text came out tiny in
+fonts whose own script-size metrics are small (for example Helvetica Neue, used
+by the purple and tig templates). The engine now sets the size explicitly
+(0.7em), so the result no longer depends on the font.
+
+---
+
 ## v0.14.1 — Coloured highlights
 
 **Coloured highlights.** Obsidian's highlight colours are supported. A coloured
