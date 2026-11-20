@@ -822,8 +822,10 @@ fn render_inline(out: &mut String, inline: &Inline) {
             render_inlines(out, children);
             out.push(']');
         }
-        Inline::Superscript(inner)   => { out.push_str("#super["); render_inlines(out, inner); out.push(']'); }
-        Inline::Subscript(inner)     => { out.push_str("#sub["); render_inlines(out, inner); out.push(']'); }
+        // Explicit size: with `typographic` on (the default), some fonts such as
+        // Helvetica Neue take the script size from their own metrics and come out tiny.
+        Inline::Superscript(inner)   => { out.push_str("#super(typographic: false, size: 0.7em)["); render_inlines(out, inner); out.push(']'); }
+        Inline::Subscript(inner)     => { out.push_str("#sub(typographic: false, size: 0.7em)["); render_inlines(out, inner); out.push(']'); }
         Inline::InlineMath(s)        => out.push_str(&format!("${}$", s)),
         Inline::DisplayMath(s)       => out.push_str(&format!("\n$ {} $\n", s)),
         Inline::Footnote(inner)      => { out.push_str("#footnote["); render_inlines(out, inner); out.push(']'); }
@@ -1247,18 +1249,25 @@ mod tests {
     fn highlight_colours_from_leading_dot() {
         let cases = [
             ("==plain==", "#fdf1a5", "plain"),
-            ("==🔴text==", "#efbfbb", "text"),
-            ("==🟠text==", "#fae0c3", "text"),
-            ("==🟡text==", "#f2e6bd", "text"),
-            ("==🟢text==", "#d0efcc", "text"),
-            ("==🔵text==", "#b8ccf2", "text"),
-            ("==🟣text==", "#e3ccf3", "text"),
+            ("==🔴text==", "#f8bcb9", "text"),
+            ("==🟠text==", "#ffdfbf", "text"),
+            ("==🟡text==", "#f4e5b8", "text"),
+            ("==🟢text==", "#c8f0c9", "text"),
+            ("==🔵text==", "#b3ccf5", "text"),
+            ("==🟣text==", "#e8cbf6", "text"),
         ];
         for (md, fill, body) in cases {
             let out = render_typst(&parse_markdown(&format!("{md}\n")), None, &RenderOptions::default());
             let want = format!("#highlight(fill: rgb(\"{fill}\"))[{body}]");
             assert!(out.contains(&want), "Expected {want} for {md}:\n{out}");
         }
+    }
+
+    #[test]
+    fn super_and_subscript_have_explicit_size() {
+        let out = render_typst(&parse_markdown("E = mc<sup>2</sup> and H<sub>2</sub>O\n"), None, &RenderOptions::default());
+        assert!(out.contains("#super(typographic: false, size: 0.7em)[2]"), "{out}");
+        assert!(out.contains("#sub(typographic: false, size: 0.7em)[2]"), "{out}");
     }
 
     #[test]

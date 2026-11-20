@@ -26,16 +26,16 @@ impl HighlightColor {
         })
     }
 
-    /// Background colour, sampled from Obsidian's highlight colours.
+    /// Background colour, matching Obsidian's highlight colours.
     pub fn fill_hex(self) -> &'static str {
         match self {
             Self::Default => "#fdf1a5",
-            Self::Red => "#efbfbb",
-            Self::Orange => "#fae0c3",
-            Self::Yellow => "#f2e6bd",
-            Self::Green => "#d0efcc",
-            Self::Blue => "#b8ccf2",
-            Self::Purple => "#e3ccf3",
+            Self::Red => "#f8bcb9",
+            Self::Orange => "#ffdfbf",
+            Self::Yellow => "#f4e5b8",
+            Self::Green => "#c8f0c9",
+            Self::Blue => "#b3ccf5",
+            Self::Purple => "#e8cbf6",
         }
     }
 }
