@@ -1,5 +1,22 @@
 # Release Notes
 
+## v0.16.0 — Image alt text and size in double bracket embeds
+
+**Obsidian's image options.** `![[image.png|200|alt text]]` now gives both
+the width and the alt text; before, the alt text came out as `|200|alt text`
+and the width was lost. The options after the path may be in any order: a size
+(`200`, or `100x145` where only the width is used) sets the width, anything
+else is the alt text. Examples: `![[image.png|alt text]]`,
+`![[image.png|alt text|200]]`. The alt text becomes the figure caption, as for
+`![alt text|200](image.png)`.
+
+**File names as captions (optional).** New `--filename-captions` option: an
+image without alt text is captioned with its file name (`laptop.png` →
+"laptop"). Alt text always wins. Off by default. The WASM `render_to_typst`
+takes a new optional `filename_captions` argument.
+
+---
+
 ## v0.15.0 — LaTeX math
 
 **Math is written in LaTeX by default.** Formulas between `$…$` and `$$…$$`
