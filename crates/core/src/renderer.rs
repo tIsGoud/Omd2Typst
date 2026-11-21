@@ -16,6 +16,7 @@ pub fn render_typst(doc: &Document, template: Option<&str>, options: &RenderOpti
         c.mode = options.math;
         c.failures.clear();
     });
+    FILENAME_CAPTIONS.with(|c| c.set(options.filename_captions));
     WIKI_CTX.with(|c| {
         *c.borrow_mut() = WikiCtx {
             mode: options.wikilinks,
@@ -701,6 +702,31 @@ fn render_checkbox_list(out: &mut String, items: &[ListItem], level_offset: u8) 
 }
 
 // ---------------------------------------------------------------------------
+// Image captions
+// ---------------------------------------------------------------------------
+
+thread_local! {
+    /// `RenderOptions::filename_captions` for the current render call.
+    static FILENAME_CAPTIONS: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// The caption of an image: its alt text, or — with `filename_captions` and no
+/// alt text — the file name without folder and extension. Images the plugin
+/// generates itself (`…-mermaid-0.svg`, `…-excalidraw-0.png`) never get a
+/// file-name caption.
+fn image_caption(alt: &str, src: &str) -> String {
+    if !alt.trim().is_empty() || !FILENAME_CAPTIONS.with(|c| c.get()) {
+        return alt.to_string();
+    }
+    let file = src.rsplit(['/', '\\']).next().unwrap_or(src);
+    let stem = file.rsplit_once('.').map_or(file, |(s, _)| s);
+    let generated = ["-mermaid-", "-excalidraw-"].iter().any(|m| {
+        stem.rsplit_once(m).is_some_and(|(_, n)| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()))
+    });
+    if generated { String::new() } else { stem.to_string() }
+}
+
+// ---------------------------------------------------------------------------
 // Math
 // ---------------------------------------------------------------------------
 
@@ -912,7 +938,7 @@ fn render_inline(out: &mut String, inline: &Inline) {
                     Some(w) => format!("image({}, width: {}pt)", typst_string_val(src), w),
                     None    => format!("image({})", typst_string_val(src)),
                 };
-                out.push_str(&format!("#figure({}, caption: [{}])", img, escape_typst(alt)));
+                out.push_str(&format!("#figure({}, caption: [{}])", img, escape_typst(&image_caption(alt, src))));
             }
         }
         Inline::SoftBreak => out.push(' '),
@@ -1336,6 +1362,45 @@ mod tests {
         let failures = take_math_failures();
         assert_eq!(failures.len(), 1, "{failures:?}");
         assert!(take_math_failures().is_empty());
+    }
+
+    fn image_out(md: &str, filename_captions: bool) -> String {
+        let opts = RenderOptions { filename_captions, ..Default::default() };
+        render_typst(&parse_markdown(&format!("{md}\n")), None, &opts)
+    }
+
+    #[test]
+    fn obsidian_embed_options_give_width_and_alt() {
+        for (md, caption, width) in [
+            ("![[_assets/laptop.png|200|alt text]]", "alt text", Some("200pt")),
+            ("![[_assets/laptop.png|alt text|200]]", "alt text", Some("200pt")),
+            ("![[_assets/laptop.png|100x145|alt text]]", "alt text", Some("100pt")),
+            ("![[_assets/laptop.png|alt text]]", "alt text", None),
+            ("![[_assets/laptop.png|200]]", "", Some("200pt")),
+            ("![[_assets/laptop.png]]", "", None),
+            ("![alt text|200](_assets/laptop.png)", "alt text", Some("200pt")),
+        ] {
+            let out = image_out(md, false);
+            assert!(out.contains(&format!("caption: [{caption}]")), "{md}:\n{out}");
+            match width {
+                Some(w) => assert!(out.contains(&format!("width: {w}")), "{md}:\n{out}"),
+                None => assert!(!out.contains("width:") || !out.contains("laptop.png\", width"), "{md}:\n{out}"),
+            }
+        }
+    }
+
+    #[test]
+    fn filename_caption_only_without_alt_text() {
+        assert!(image_out("![[_assets/laptop.png]]", true).contains("caption: [laptop]"));
+        assert!(image_out("![[_assets/laptop.png|200]]", true).contains("caption: [laptop]"));
+        assert!(image_out("![](_assets/my%20pic.png)", true).contains("caption: [my%20pic]"));
+        // Alt text wins over the file name.
+        let out = image_out("![[_assets/laptop.png|200|alt text]]", true);
+        assert!(out.contains("caption: [alt text]") && !out.contains("[laptop]"), "{out}");
+        // Off by default; plugin-generated images never get one.
+        assert!(!image_out("![[_assets/laptop.png]]", false).contains("[laptop]"));
+        assert!(!image_out("![](<doc-mermaid-0.svg>)", true).contains("[doc-mermaid-0]"));
+        assert!(!image_out("![](<doc-excalidraw-1.png>)", true).contains("[doc-excalidraw-1]"));
     }
 
     #[test]

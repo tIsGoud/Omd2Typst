@@ -540,8 +540,12 @@ pub fn collect_inline_text(inlines: &[Inline]) -> String {
 }
 
 /// Convert Obsidian wikilink image syntax to standard Markdown.
-///   ![[path|150]]  →  ![|150](<path>)
-///   ![[path]]      →  ![](<path>)
+///   ![[path|150]]            →  ![|150](<path>)
+///   ![[path|150|alt text]]   →  ![alt text|150](<path>)
+///   ![[path|alt text]]       →  ![alt text](<path>)
+///   ![[path]]                →  ![](<path>)
+/// After the path, the `|`-separated options may come in any order: a size
+/// (`150` or `100x145`) is the width, anything else is the alt text.
 /// The destination is angle-bracket wrapped so paths containing spaces or
 /// parentheses (e.g. `![[Some Note.md]]`) still parse as a single URL.
 static OBSIDIAN_IMAGE_RE: OnceLock<Regex> = OnceLock::new();
@@ -578,11 +582,9 @@ fn strip_obsidian_comments(input: &str) -> String {
 }
 
 fn preprocess_obsidian_images(input: &str) -> String {
-    // Matches:
-    //   ![[path]]      → no width, no alt
-    //   ![[path|150]]  → width only
+    // Matches `![[path]]` and `![[path|options]]`, see `split_embed_options`.
     // Fenced code blocks (``` or ~~~) are passed through unchanged.
-    let re = OBSIDIAN_IMAGE_RE.get_or_init(|| Regex::new(r"!\[\[([^\]\|]+?)(?:\|(\d+))?\]\]").unwrap());
+    let re = OBSIDIAN_IMAGE_RE.get_or_init(|| Regex::new(r"!\[\[([^\]\|\n]+?)(?:\|([^\]\n]*))?\]\]").unwrap());
     let fence = FENCE_RE.get_or_init(|| Regex::new(r"^(```|~~~)").unwrap());
 
     let mut out = String::with_capacity(input.len());
@@ -599,19 +601,50 @@ fn preprocess_obsidian_images(input: &str) -> String {
             // Normal content — apply the substitution
             let replaced = re.replace_all(line, |caps: &regex::Captures| {
                 let path  = &caps[1];
-                let width = caps.get(2).map(|m| m.as_str()).unwrap_or("");
+                let (alt, width) = split_embed_options(caps.get(2).map(|m| m.as_str()).unwrap_or(""));
                 // Angle-bracket the destination so spaces / parens in the path
                 // don't terminate the URL (CommonMark `<...>` destination).
-                if width.is_empty() {
-                    format!("![](<{}>)", path)
-                } else {
-                    format!("![|{}](<{}>)", width, path)
+                match width {
+                    Some(w) => format!("![{}|{}](<{}>)", alt, w, path),
+                    None => format!("![{}](<{}>)", alt, path),
                 }
             });
             out.push_str(&replaced);
         }
     }
     out
+}
+
+/// Split the options of an image embed (the text after the first `|` in
+/// `![[path|…]]`) into alt text and width. A segment that is a size (`150` or
+/// `100x145`, as Obsidian allows) gives the width; the height is ignored, the
+/// aspect ratio is kept. Every other segment is alt text.
+fn split_embed_options(options: &str) -> (String, Option<u32>) {
+    let mut alt: Vec<&str> = Vec::new();
+    let mut width = None;
+    for seg in options.split('|').map(str::trim).filter(|s| !s.is_empty()) {
+        match parse_embed_size(seg) {
+            Some(w) if width.is_none() => width = Some(w),
+            Some(_) => {}
+            None => alt.push(seg),
+        }
+    }
+    (alt.join("|"), width)
+}
+
+/// `150` or `150x200` → the width.
+fn parse_embed_size(seg: &str) -> Option<u32> {
+    let (w, h) = match seg.split_once('x') {
+        Some((w, h)) => (w, Some(h)),
+        None => (seg, None),
+    };
+    if h.is_some_and(|h| h.is_empty() || !h.bytes().all(|b| b.is_ascii_digit())) {
+        return None;
+    }
+    if w.is_empty() || !w.bytes().all(|b| b.is_ascii_digit()) {
+        return None;
+    }
+    w.parse().ok()
 }
 
 /// Detect Obsidian task-list syntax at the start of a list item.

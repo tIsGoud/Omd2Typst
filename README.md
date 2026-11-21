@@ -107,6 +107,9 @@ omd2typst input.md output.pdf --wikilinks bold
 # Real links: [[#Heading]] jumps to that heading, other notes open in Obsidian
 omd2typst input.md output.pdf --wikilinks link --obsidian-vault "My Vault"
 
+# Caption images without alt text with their file name (alt text always wins)
+omd2typst input.md output.pdf --filename-captions
+
 # Math: LaTeX (default, as Obsidian renders it) or Typst syntax
 omd2typst input.md output.pdf --math typst
 
@@ -320,8 +323,8 @@ set text(font: ("Your Serif Font", "Georgia", "Times New Roman", "Liberation Ser
 | Inline code | `` `code` `` | |
 | Links | `[text](url)` | |
 | Images — standard | `![alt](path)` | |
-| Images — with width | `![alt\|200](path)` | Width in points |
-| Images — wikilink | `![[path\|200]]` | Obsidian wikilink format |
+| Images — with width | `![alt\|200](path)` | Width in points. The alt text becomes the figure caption |
+| Images — wikilink | `![[path]]`, `![[path\|200]]`, `![[path\|200\|alt text]]`, `![[path\|alt text]]` | Obsidian's double bracket format. Width (`200` or `100x145`; the height is ignored) and alt text may come in any order. Without alt text there is no caption, unless `--filename-captions` is used |
 | Wikilinks `[[Note]]`, `[[Note\|alias]]`, `[[#Heading]]` | Rendered per `--wikilinks`: `text` (default), `bold`, `link`, `keep` — see below |
 | Code block | ` ```lang ``` ` | Language tag preserved for syntax highlighting |
 | Table | `| col |` | Left / center / right column alignment |

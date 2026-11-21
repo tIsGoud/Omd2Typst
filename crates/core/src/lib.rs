@@ -69,6 +69,9 @@ impl MathMode {
 pub struct RenderOptions {
     /// Syntax of math formulas. Default: [`MathMode::Latex`].
     pub math: MathMode,
+    /// Use the image's file name as caption when it has no alt text.
+    /// Default: off (images without alt text get no caption).
+    pub filename_captions: bool,
     /// How wikilinks are rendered. Default: [`WikilinkMode::Text`].
     pub wikilinks: WikilinkMode,
     /// Obsidian vault name used to build `obsidian://open` links to other notes

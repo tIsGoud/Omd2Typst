@@ -57,6 +57,11 @@ struct Cli {
     #[arg(long, value_enum, default_value_t = Math::Latex)]
     math: Math,
 
+    /// Use the image file name as caption for images without alt text.
+    /// Alt text, when present, always wins.
+    #[arg(long)]
+    filename_captions: bool,
+
     /// Write the built-in styling to FILE as a Typst template and exit.
     /// Edit the file, then pass it back with --template.
     #[arg(long, value_name = "FILE")]
@@ -200,6 +205,7 @@ fn main() -> Result<()> {
         cli.template.as_deref(),
         &RenderOptions {
             math: cli.math.into(),
+            filename_captions: cli.filename_captions,
             wikilinks: cli.wikilinks.into(),
             obsidian_vault: cli.obsidian_vault.clone(),
         },
