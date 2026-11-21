@@ -13,7 +13,9 @@ pub fn parse_markdown(input: &str) -> Document {
     // Convert Obsidian wikilink images to standard Markdown before comrak sees them:
     //   ![[path|width]]  →  ![|width](path)
     //   ![[path]]        →  ![](path)
-    let body_owned = preprocess_obsidian_images(&body_no_comments);
+    let body_images = preprocess_obsidian_images(&body_no_comments);
+    // End tables at a line without `|`, as Obsidian does (GFM would make it a row).
+    let body_owned = end_tables_at_text_lines(&body_images);
     let body = body_owned.as_str();
 
     let arena = Arena::new();
@@ -683,6 +685,64 @@ fn make_list_item(mut blocks: Vec<Block>) -> ListItem {
     ListItem { checkbox, blocks }
 }
 
+static TABLE_DELIMITER_RE: OnceLock<Regex> = OnceLock::new();
+static QUOTE_PREFIX_RE: OnceLock<Regex> = OnceLock::new();
+
+/// End a table at the first line that has no `|`.
+///
+/// GitHub Flavored Markdown ends a table only at a blank line or another block,
+/// so a text line directly under the last row becomes one more table row.
+/// Obsidian shows that line as a separate paragraph. A blank line is inserted
+/// before such a line (keeping a `>` prefix inside quotes and call-outs) so the
+/// table ends where it does in Obsidian. Fenced code blocks are left alone.
+fn end_tables_at_text_lines(input: &str) -> String {
+    let delimiter = TABLE_DELIMITER_RE.get_or_init(|| {
+        Regex::new(r"^\|?\s*:?-+:?\s*(\|\s*:?-+:?\s*)*\|?\s*$").unwrap()
+    });
+    let quote = QUOTE_PREFIX_RE.get_or_init(|| Regex::new(r"^(?:\s*>)*\s*").unwrap());
+    let fence = FENCE_RE.get_or_init(|| Regex::new(r"^(```|~~~)").unwrap());
+
+    let mut out = String::with_capacity(input.len() + 16);
+    let mut in_fence = false;
+    let mut in_table = false;
+    let mut prev_has_pipe = false;
+
+    for line in input.split_inclusive('\n') {
+        if fence.is_match(line.trim_start()) {
+            in_fence = !in_fence;
+            in_table = false;
+            prev_has_pipe = false;
+            out.push_str(line);
+            continue;
+        }
+        if in_fence {
+            out.push_str(line);
+            continue;
+        }
+
+        let prefix_len = quote.find(line).map_or(0, |m| m.end());
+        let (prefix, content) = line.split_at(prefix_len);
+        let content = content.trim_end_matches(['\n', '\r']);
+        let has_pipe = content.contains('|');
+
+        if in_table {
+            if content.trim().is_empty() {
+                in_table = false;
+            } else if !has_pipe {
+                // The line is text, not a row: end the table first.
+                out.push_str(prefix.trim_end());
+                out.push('\n');
+                in_table = false;
+            }
+        } else if prev_has_pipe && has_pipe && delimiter.is_match(content) {
+            in_table = true;
+        }
+        prev_has_pipe = has_pipe && !delimiter.is_match(content);
+        out.push_str(line);
+    }
+    out
+}
+
 static MARKED_TEXT_RE: OnceLock<Regex> = OnceLock::new();
 
 /// Splits a raw text node on `==highlight==` markers (optionally `==🔴highlight==`
@@ -722,6 +782,43 @@ fn capitalize(s: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn first_table_rows(md: &str) -> Option<usize> {
+        parse_markdown(md).blocks.iter().find_map(|b| match b {
+            Block::Table { rows, .. } => Some(rows.len()),
+            _ => None,
+        })
+    }
+
+    #[test]
+    fn text_directly_below_a_table_is_a_paragraph() {
+        let doc = parse_markdown("| A | B |\n|---|---|\n| 1 | 2 |\nA line below.\n\nNext.\n");
+        assert!(matches!(doc.blocks[0], Block::Table { .. }));
+        assert_eq!(first_table_rows("| A | B |\n|---|---|\n| 1 | 2 |\nA line below.\n"), Some(1));
+        match &doc.blocks[1] {
+            Block::Paragraph(p) => assert!(matches!(&p[0], Inline::Text(t) if t == "A line below.")),
+            other => panic!("expected a paragraph, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn table_rows_and_blank_line_separated_tables_are_unchanged() {
+        assert_eq!(first_table_rows("| A | B |\n|---|---|\n| 1 | 2 |\n| 3 | 4 |\n"), Some(2));
+        // Rows without outer pipes are still rows.
+        assert_eq!(first_table_rows("A | B\n--|--\n1 | 2\n3 | 4\n"), Some(2));
+        assert_eq!(first_table_rows("| A | B |\n|---|---|\n| 1 | 2 |\n\nText\n"), Some(1));
+    }
+
+    #[test]
+    fn text_below_a_table_in_a_callout_or_code_fence() {
+        let doc = parse_markdown("> [!note] T\n> | A | B |\n> |---|---|\n> | 1 | 2 |\n> Text below.\n");
+        let Block::Callout { body, .. } = &doc.blocks[0] else { panic!("expected a callout") };
+        assert!(matches!(body[0], Block::Table { ref rows, .. } if rows.len() == 1), "{body:?}");
+        assert!(matches!(body.last(), Some(Block::Paragraph(_))), "{body:?}");
+        // Inside a code fence nothing is touched.
+        let fenced = "```\n| A | B |\n|---|---|\n| 1 | 2 |\nplain\n```\n";
+        assert_eq!(end_tables_at_text_lines(fenced), fenced);
+    }
 
     #[test]
     fn strip_inline_comment() {

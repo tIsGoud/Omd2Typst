@@ -330,7 +330,7 @@ set text(font: ("Your Serif Font", "Georgia", "Times New Roman", "Liberation Ser
 | Images — wikilink | `![[path]]`, `![[path\|200]]`, `![[path\|200\|alt text]]`, `![[path\|alt text]]` | Obsidian's double bracket format. Width (`200` or `100x145`; the height is ignored) and alt text may come in any order. Without alt text there is no caption, unless `--filename-captions` is used |
 | Wikilinks `[[Note]]`, `[[Note\|alias]]`, `[[#Heading]]` | Rendered per `--wikilinks`: `text` (default), `bold`, `link`, `keep` — see below |
 | Code block | ` ```lang ``` ` | Language tag preserved for syntax highlighting |
-| Table | `| col |` | Left / center / right column alignment |
+| Table | `| col |` | Left / center / right column alignment. A table ends at the first line without a `|`, as in Obsidian, so a text line directly below the last row is a paragraph, not an extra row |
 | Callout | `> [!type] Title` | 13 built-in types with Lucide SVG icons in each type's accent colour |
 | Block quote | `> text` | Left accent bar with indented text; same colour as the summary box border |
 | Bullet list | `- item` | Nested to any depth |

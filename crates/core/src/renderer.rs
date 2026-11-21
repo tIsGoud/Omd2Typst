@@ -232,7 +232,8 @@ const BUILTIN_PREAMBLE: &str = r##"#set page(
 #set text(font: ("Verdana", "Arial", "Liberation Sans"), size: 11pt)
 #set heading(numbering: "1.1.")
 #set table(stroke: 0.5pt)
-#show figure: set block(below: 1.5em)
+#show figure: set block(below: 2em)
+#show figure.caption: set text(size: 0.85em)
 #show link: set text(fill: rgb("#1e3a5f"))
 
 #let _co-colors = (
