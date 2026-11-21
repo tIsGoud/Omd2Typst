@@ -107,6 +107,9 @@ omd2typst input.md output.pdf --wikilinks bold
 # Real links: [[#Heading]] jumps to that heading, other notes open in Obsidian
 omd2typst input.md output.pdf --wikilinks link --obsidian-vault "My Vault"
 
+# Image sizes: the width in pixels that counts as the full text width (default 700)
+omd2typst input.md output.pdf --image-reference-width 800
+
 # Caption images without alt text with their file name (alt text always wins)
 omd2typst input.md output.pdf --filename-captions
 
@@ -323,7 +326,7 @@ set text(font: ("Your Serif Font", "Georgia", "Times New Roman", "Liberation Ser
 | Inline code | `` `code` `` | |
 | Links | `[text](url)` | |
 | Images — standard | `![alt](path)` | |
-| Images — with width | `![alt\|200](path)` | Width in points. The alt text becomes the figure caption |
+| Images — with width | `![alt\|200](path)` | Width in Obsidian pixels, converted to a share of the text width (see *Image sizes*). The alt text becomes the figure caption |
 | Images — wikilink | `![[path]]`, `![[path\|200]]`, `![[path\|200\|alt text]]`, `![[path\|alt text]]` | Obsidian's double bracket format. Width (`200` or `100x145`; the height is ignored) and alt text may come in any order. Without alt text there is no caption, unless `--filename-captions` is used |
 | Wikilinks `[[Note]]`, `[[Note\|alias]]`, `[[#Heading]]` | Rendered per `--wikilinks`: `text` (default), `bold`, `link`, `keep` — see below |
 | Code block | ` ```lang ``` ` | Language tag preserved for syntax highlighting |
@@ -339,6 +342,19 @@ set text(font: ("Your Serif Font", "Georgia", "Times New Roman", "Liberation Ser
 | Display math | `$$formula$$` | Centred display block; matrices (`pmatrix`, `bmatrix`, …) and `cases` are supported |
 | Footnotes | `[^1]` / `[^1]: text` | Rendered as Typst footnotes (bottom of the page) |
 | Thematic break | `---` | Full-width horizontal rule |
+
+### Image sizes
+
+An image size such as `![[image.png|400]]` or `![alt|400](image.png)` is in **pixels** in Obsidian, where it takes up a share of the note's width. A PDF page has a different width, so the number is converted to the same *share* of the text width: the size divided by a reference width, at most 100%.
+
+With the default reference width of **700** (Obsidian's default *readable line length*), `|400` becomes 57% of the text width, `|350` becomes 50%, and `|700` or more becomes 100%. The result does not depend on the template's margins or the paper size.
+
+| Option | Effect |
+|---|---|
+| `--image-reference-width PX` | The width in pixels that counts as the full text width. Default 700. Use the value that matches your Obsidian line width (for example when you changed *Readable line length* or write in a wider editor). |
+| `--image-reference-width 0` | Read the numbers as points (the behaviour before v0.17.0). |
+
+Only the proportion is converted: the height follows from the aspect ratio, and a `WxH` size uses the width.
 
 ### Callout types and icons
 

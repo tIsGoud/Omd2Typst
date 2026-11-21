@@ -57,6 +57,13 @@ struct Cli {
     #[arg(long, value_enum, default_value_t = Math::Latex)]
     math: Math,
 
+    /// Width in pixels that counts as the full text width when converting
+    /// image widths (`![[img|400]]`). 400 with the default 700 (Obsidian's
+    /// readable line length) is 57% of the text width. Use 0 to read the numbers
+    /// as points instead.
+    #[arg(long, value_name = "PX", default_value_t = 700)]
+    image_reference_width: u32,
+
     /// Use the image file name as caption for images without alt text.
     /// Alt text, when present, always wins.
     #[arg(long)]
@@ -206,6 +213,7 @@ fn main() -> Result<()> {
         &RenderOptions {
             math: cli.math.into(),
             filename_captions: cli.filename_captions,
+            image_reference_width: Some(cli.image_reference_width),
             wikilinks: cli.wikilinks.into(),
             obsidian_vault: cli.obsidian_vault.clone(),
         },

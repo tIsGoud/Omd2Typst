@@ -64,11 +64,21 @@ impl MathMode {
     }
 }
 
+/// Default for [`RenderOptions::image_reference_width`]: Obsidian's default
+/// readable line length in pixels.
+pub const DEFAULT_IMAGE_REFERENCE_WIDTH: u32 = 700;
+
 /// Rendering options.
 #[derive(Default, Clone, Debug)]
 pub struct RenderOptions {
     /// Syntax of math formulas. Default: [`MathMode::Latex`].
     pub math: MathMode,
+    /// Width, in Obsidian pixels, that counts as the full text width when
+    /// image widths (`![[img|400]]`) are converted. A width of 400 with the
+    /// default 700 (Obsidian's readable line length) becomes 57% of the text
+    /// width. `None` means [`DEFAULT_IMAGE_REFERENCE_WIDTH`]; `Some(0)` treats
+    /// the numbers as points instead.
+    pub image_reference_width: Option<u32>,
     /// Use the image's file name as caption when it has no alt text.
     /// Default: off (images without alt text get no caption).
     pub filename_captions: bool,

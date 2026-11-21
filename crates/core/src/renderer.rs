@@ -1,5 +1,5 @@
 use crate::ast::*;
-use crate::{MathMode, RenderOptions, WikilinkMode};
+use crate::{MathMode, RenderOptions, WikilinkMode, DEFAULT_IMAGE_REFERENCE_WIDTH};
 use std::cell::RefCell;
 use std::collections::HashMap;
 
@@ -17,6 +17,7 @@ pub fn render_typst(doc: &Document, template: Option<&str>, options: &RenderOpti
         c.failures.clear();
     });
     FILENAME_CAPTIONS.with(|c| c.set(options.filename_captions));
+    IMAGE_REFERENCE_WIDTH.with(|c| c.set(options.image_reference_width.unwrap_or(DEFAULT_IMAGE_REFERENCE_WIDTH)));
     WIKI_CTX.with(|c| {
         *c.borrow_mut() = WikiCtx {
             mode: options.wikilinks,
@@ -710,6 +711,24 @@ thread_local! {
     static FILENAME_CAPTIONS: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
 
+thread_local! {
+    /// `RenderOptions::image_reference_width` for the current render call.
+    static IMAGE_REFERENCE_WIDTH: std::cell::Cell<u32> = const { std::cell::Cell::new(DEFAULT_IMAGE_REFERENCE_WIDTH) };
+}
+
+/// Typst width for an Obsidian image width in pixels: the share of the
+/// reference width (the text width in Obsidian), capped at 100%. With a
+/// reference width of 0 the number is used as points.
+fn image_width(px: u32) -> String {
+    let reference = IMAGE_REFERENCE_WIDTH.with(|c| c.get());
+    if reference == 0 {
+        return format!("{px}pt");
+    }
+    let percent = (f64::from(px) / f64::from(reference) * 100.0).min(100.0);
+    let text = format!("{percent:.1}");
+    format!("{}%", text.strip_suffix(".0").unwrap_or(&text))
+}
+
 /// The caption of an image: its alt text, or — with `filename_captions` and no
 /// alt text — the file name without folder and extension. Images the plugin
 /// generates itself (`…-mermaid-0.svg`, `…-excalidraw-0.png`) never get a
@@ -935,7 +954,7 @@ fn render_inline(out: &mut String, inline: &Inline) {
                 ));
             } else {
                 let img = match width {
-                    Some(w) => format!("image({}, width: {}pt)", typst_string_val(src), w),
+                    Some(w) => format!("image({}, width: {})", typst_string_val(src), image_width(*w)),
                     None    => format!("image({})", typst_string_val(src)),
                 };
                 out.push_str(&format!("#figure({}, caption: [{}])", img, escape_typst(&image_caption(alt, src))));
@@ -1372,13 +1391,13 @@ mod tests {
     #[test]
     fn obsidian_embed_options_give_width_and_alt() {
         for (md, caption, width) in [
-            ("![[_assets/laptop.png|200|alt text]]", "alt text", Some("200pt")),
-            ("![[_assets/laptop.png|alt text|200]]", "alt text", Some("200pt")),
-            ("![[_assets/laptop.png|100x145|alt text]]", "alt text", Some("100pt")),
+            ("![[_assets/laptop.png|200|alt text]]", "alt text", Some("28.6%")),
+            ("![[_assets/laptop.png|alt text|200]]", "alt text", Some("28.6%")),
+            ("![[_assets/laptop.png|100x145|alt text]]", "alt text", Some("14.3%")),
             ("![[_assets/laptop.png|alt text]]", "alt text", None),
-            ("![[_assets/laptop.png|200]]", "", Some("200pt")),
+            ("![[_assets/laptop.png|200]]", "", Some("28.6%")),
             ("![[_assets/laptop.png]]", "", None),
-            ("![alt text|200](_assets/laptop.png)", "alt text", Some("200pt")),
+            ("![alt text|200](_assets/laptop.png)", "alt text", Some("28.6%")),
         ] {
             let out = image_out(md, false);
             assert!(out.contains(&format!("caption: [{caption}]")), "{md}:\n{out}");
@@ -1387,6 +1406,21 @@ mod tests {
                 None => assert!(!out.contains("width:") || !out.contains("laptop.png\", width"), "{md}:\n{out}"),
             }
         }
+    }
+
+    #[test]
+    fn image_width_is_a_share_of_the_reference_width() {
+        let width = |px: u32, reference: Option<u32>| {
+            let opts = RenderOptions { image_reference_width: reference, ..Default::default() };
+            let out = render_typst(&parse_markdown(&format!("![[a.png|{px}]]\n")), None, &opts);
+            out.split("image(\"a.png\", width: ").nth(1).unwrap().split(')').next().unwrap().to_string()
+        };
+        assert_eq!(width(400, None), "57.1%");
+        assert_eq!(width(350, None), "50%");
+        assert_eq!(width(700, None), "100%");
+        assert_eq!(width(900, None), "100%");
+        assert_eq!(width(400, Some(800)), "50%");
+        assert_eq!(width(400, Some(0)), "400pt");
     }
 
     #[test]

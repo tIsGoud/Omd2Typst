@@ -1,5 +1,29 @@
 # Release Notes
 
+## v0.17.0 — Image sizes as a share of the text width
+
+**Behaviour change.** An image size such as `![[image.png|400]]` is in pixels in
+Obsidian, but the engine used it as points, so images came out much larger in
+the PDF: `|400` was about 90% of the text width on A4, where it is about half
+the note width in Obsidian. The size is now converted to the same *share* of the
+text width: the size divided by a reference width, at most 100%.
+
+With the default reference width of **700** (Obsidian's default readable line
+length), `|400` becomes 57%, `|350` becomes 50% and `|700` or more becomes
+100%. It does not depend on the template's margins or the paper size, and it
+works for every form: `![alt|400](…)`, `![[…|400]]`, `![[…|400|alt text]]` and
+sized Excalidraw drawings.
+
+**Setting the reference width.** CLI: `--image-reference-width PX`. Plugin:
+*Image width reference (px)* in the export settings. Enter your own Obsidian
+line width if you changed *Readable line length* or use a wider editor. `0`
+reads the numbers as points again (the old behaviour).
+
+Existing documents with sized images will look smaller than before. The WASM
+`render_to_typst` takes a new optional `image_reference_width` argument.
+
+---
+
 ## v0.16.0 — Image alt text and size in double bracket embeds
 
 **Obsidian's image options.** `![[image.png|200|alt text]]` now gives both
