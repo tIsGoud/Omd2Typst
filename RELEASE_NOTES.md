@@ -1,5 +1,21 @@
 # Release Notes
 
+## v0.17.1 — Tables, figure captions
+
+**Text below a table.** A text line directly under the last table row (no blank
+line between) became an extra table row in the PDF. A table now ends at the
+first line without a `|`, as in Obsidian, so such a line is a paragraph.
+Fenced code is not touched, and tables in call-outs and quotes keep their `>`
+prefix.
+
+**Figure captions.** Captions are smaller (0.85em) and there is more space
+below a figure (2em instead of 1.5em). This is in the built-in template and in
+all shipped templates (`show figure.caption: set text(size: 0.85em)` and
+`show figure: set block(below: 2em)`). Custom templates can add the same two
+lines.
+
+---
+
 ## v0.17.0 — Image sizes as a share of the text width
 
 **Behaviour change.** An image size such as `![[image.png|400]]` is in pixels in
