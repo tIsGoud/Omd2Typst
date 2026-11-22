@@ -420,7 +420,7 @@ The following Obsidian and Markdown features are **not** handled. They will eith
 | Note embeds `![[Note Name]]` | Embedding other notes would require resolving the full vault at runtime |
 | Obsidian comments `%%…%%` | Stripped from output (inline and block) |
 | Tags `#tag` | No equivalent concept in a PDF document |
-| Mermaid diagrams | Typst has no native Mermaid renderer |
+| Mermaid diagrams | Typst has no native Mermaid renderer. The Obsidian plugin renders them; its *Export as bundle* contains them as images that the CLI converts (see *Bundles and CI/CD*) |
 | Obsidian Tasks plugin fields | Due dates, priorities, recurrence — tool-specific syntax not in standard Markdown |
 | Dataview queries | Require vault-wide evaluation at Obsidian runtime |
 | Canvas files (`.canvas`) | JSON-based spatial format, not Markdown |
@@ -503,6 +503,33 @@ The AST is intentionally minimal — only the constructs that have a direct Typs
 
 ---
 
+## Bundles and CI/CD
+
+The Obsidian plugin's **Export as bundle** command writes a folder with the note as plain Markdown and an `assets/` folder holding every image it uses. That includes everything the CLI cannot render itself: Mermaid diagrams and Excalidraw drawings (rendered by Obsidian), Bases tables (as Markdown tables) and images referenced with any Obsidian link style. The CLI converts such a folder without Obsidian and without the vault:
+
+```bash
+cd "My note"
+omd2typst "My note.md" "My note.pdf" --template path/to/my-template.typ
+```
+
+- **Run it from inside the bundle folder.** Image paths in the bundle are relative to it.
+- **Options are chosen at conversion time.** The template, `--wikilinks`, `--math`, `--image-reference-width` and the other options are not stored in the bundle.
+- **A bundle is a snapshot.** Export again from Obsidian after changing the note.
+
+Because a bundle is just a folder of files, it suits **CI/CD pipelines**: export the notes with the plugin into a folder that is part of a repository, and let a pipeline job download the release binary for its platform and convert every bundle. The binary has no dependencies and Typst is built in, so the job needs no Obsidian, no Node and no Typst installation:
+
+```bash
+# in the pipeline, with the omd2typst binary unpacked next to the bundles
+for dir in bundles/*/; do
+  name=$(basename "$dir")
+  (cd "$dir" && ../../omd2typst "$name.md" "$name.pdf" --template ../../templates/my-template.typ)
+done
+```
+
+Custom fonts can travel with the binary (see *User fonts directory*).
+
+---
+
 ## CLI or Obsidian plugin?
 
 Both use the same conversion engine (`omd2typst-core`), so the Markdown they understand and the Typst they produce are the same. They differ in how they are run and in what surrounds the conversion.
@@ -521,6 +548,7 @@ Both use the same conversion engine (`omd2typst-core`), so the Markdown they und
 | **Obsidian Bases embeds** (`![[x.base]]`) | Placeholder | ✓ (rendered as a table) |
 | **PDF, note and audio/video embeds** | Placeholder | Placeholder |
 | **Frontmatter template** | — | *Insert frontmatter* command |
+| **Bundles** (folder with a note and all its images, see *Bundles and CI/CD*) | Converts them, also in CI/CD pipelines | Creates them (*Export as bundle*) |
 | **Scripts, CI/CD** | ✓ | — |
 
 Features that only exist in the plugin depend on Obsidian itself (Mermaid, Bases, the vault), so the CLI cannot offer them.
@@ -536,4 +564,4 @@ omd2typst-core is the shared foundation for four consumers:
 | **CLI** (`crates/cli`) | Native binary; Typst embedded — no external tools required |
 | **Obsidian plugin** ([obsidian-omd2typst](https://github.com/tIsGoud/Obsidian-Omd2Typst)) | `crates/wasm` compiled via wasm-pack for Markdown→Typst; PDF via system `typst` CLI |
 | **Web service** (`crates/web`) | Stub — specced separately |
-| **CI/CD pipelines** | CLI binary |
+| **CI/CD pipelines** | CLI binary; converts the bundles the plugin exports |
