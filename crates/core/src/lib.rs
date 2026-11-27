@@ -68,11 +68,46 @@ impl MathMode {
 /// readable line length in pixels.
 pub const DEFAULT_IMAGE_REFERENCE_WIDTH: u32 = 700;
 
+/// How `![[annex.pdf]]` embeds are included. `Fit` and `Full` need Typst 0.14 or newer to compile.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum PdfEmbedMode {
+    /// Not included: the "Embed not supported" placeholder (default).
+    #[default]
+    Off,
+    /// Left out silently: nothing is shown for the embed.
+    Skip,
+    /// One page per PDF page, inside the document's margins, keeping the
+    /// document's header and footer.
+    Fit,
+    /// One full page per PDF page, without margins, header and footer.
+    Full,
+}
+
+impl PdfEmbedMode {
+    /// Parse `off`, `skip`, `fit` or `full` (case-insensitive).
+    pub fn parse(s: &str) -> Option<Self> {
+        match s.trim().to_ascii_lowercase().as_str() {
+            "off" => Some(Self::Off),
+            "skip" => Some(Self::Skip),
+            "fit" => Some(Self::Fit),
+            "full" => Some(Self::Full),
+            _ => None,
+        }
+    }
+}
+
 /// Rendering options.
 #[derive(Default, Clone, Debug)]
 pub struct RenderOptions {
     /// Syntax of math formulas. Default: [`MathMode::Latex`].
     pub math: MathMode,
+    /// How PDF embeds are included. Default: [`PdfEmbedMode::Off`].
+    pub pdf_embeds: PdfEmbedMode,
+    /// Page count of each embedded PDF, keyed by the path as it appears in the
+    /// document (without a `#page=` fragment). Typst cannot count the pages of
+    /// a PDF, so the caller supplies them; an embed without `#page=` and
+    /// without an entry here stays a placeholder.
+    pub pdf_pages: std::collections::HashMap<String, u32>,
     /// Width, in Obsidian pixels, that counts as the full text width when
     /// image widths (`![[img|400]]`) are converted. A width of 400 with the
     /// default 700 (Obsidian's readable line length) becomes 57% of the text

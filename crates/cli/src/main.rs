@@ -216,6 +216,8 @@ fn main() -> Result<()> {
             image_reference_width: Some(cli.image_reference_width),
             wikilinks: cli.wikilinks.into(),
             obsidian_vault: cli.obsidian_vault.clone(),
+            // PDF annexes need Typst 0.14+; the embedded Typst is older, so they stay placeholders.
+            ..Default::default()
         },
     );
 

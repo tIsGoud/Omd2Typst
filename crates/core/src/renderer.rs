@@ -1,5 +1,5 @@
 use crate::ast::*;
-use crate::{MathMode, RenderOptions, WikilinkMode, DEFAULT_IMAGE_REFERENCE_WIDTH};
+use crate::{MathMode, PdfEmbedMode, RenderOptions, WikilinkMode, DEFAULT_IMAGE_REFERENCE_WIDTH};
 use std::cell::RefCell;
 use std::collections::HashMap;
 
@@ -17,6 +17,7 @@ pub fn render_typst(doc: &Document, template: Option<&str>, options: &RenderOpti
         c.failures.clear();
     });
     FILENAME_CAPTIONS.with(|c| c.set(options.filename_captions));
+    PDF_CTX.with(|c| *c.borrow_mut() = PdfCtx { mode: options.pdf_embeds, pages: options.pdf_pages.clone() });
     IMAGE_REFERENCE_WIDTH.with(|c| c.set(options.image_reference_width.unwrap_or(DEFAULT_IMAGE_REFERENCE_WIDTH)));
     WIKI_CTX.with(|c| {
         *c.borrow_mut() = WikiCtx {
@@ -707,6 +708,104 @@ fn render_checkbox_list(out: &mut String, items: &[ListItem], level_offset: u8) 
 // Image captions
 // ---------------------------------------------------------------------------
 
+// ---------------------------------------------------------------------------
+// PDF embeds
+// ---------------------------------------------------------------------------
+
+#[derive(Default)]
+struct PdfCtx {
+    mode: PdfEmbedMode,
+    pages: HashMap<String, u32>,
+}
+
+thread_local! {
+    static PDF_CTX: RefCell<PdfCtx> = RefCell::new(PdfCtx::default());
+}
+
+/// The most pages one embed may include (a guard against `page=1-99999999`).
+const MAX_PDF_PAGES: u32 = 2000;
+
+/// The pages selected by an Obsidian fragment, in order. In Obsidian `#page=3`
+/// is where the embedded viewer starts (the whole document stays scrollable),
+/// so it selects page 3 through the last page. A closed range (`page=2-4`)
+/// selects those pages, and a comma-separated list (`page=3,5,7` or
+/// `page=2-3,7`) selects exactly the pages named. Other keys (`height=…`) are
+/// ignored; without a `page` key all pages are selected. Only "to the last
+/// page" selections need the page count; pages beyond a known count are dropped.
+/// Anything else (`page=3-`, `page=-5`, `page=x`) gives None.
+fn pdf_pages_selected(fragment: &str, count: Option<u32>) -> Option<Vec<u32>> {
+    let number = |t: &str| t.trim().parse::<u32>().ok().filter(|n| *n >= 1);
+    let range = |a: &str, b: &str| -> Option<Vec<u32>> {
+        let (first, last) = (number(a)?, number(b)?);
+        (first <= last && last - first < MAX_PDF_PAGES).then(|| (first..=last).collect())
+    };
+    let to_end = |first: u32| -> Option<Vec<u32>> {
+        let last = count?;
+        (first <= last).then(|| (first..=last).collect())
+    };
+
+    let mut pages: Vec<u32> = match fragment.split('&').find_map(|kv| kv.strip_prefix("page=")) {
+        None => to_end(1)?,
+        Some(value) if value.contains(',') => {
+            let mut list = Vec::new();
+            for item in value.split(',') {
+                match item.split_once('-') {
+                    Some((a, b)) => list.extend(range(a, b)?),
+                    None => list.push(number(item)?),
+                }
+            }
+            list
+        }
+        Some(value) => match value.split_once('-') {
+            Some((a, b)) => range(a, b)?,
+            None => to_end(number(value)?)?,
+        },
+    };
+    if let Some(n) = count {
+        pages.retain(|p| *p <= n);
+    }
+    (!pages.is_empty() && pages.len() <= MAX_PDF_PAGES as usize).then_some(pages)
+}
+
+/// Include a PDF embed as one Typst page per PDF page. Returns false (the
+/// caller shows the placeholder) when the embed is not a PDF, PDF embeds are
+/// off, or the pages are unknown (no `#page=` and no page count supplied).
+fn render_pdf_embed(out: &mut String, src: &str) -> bool {
+    if embed_extension(src).as_deref() != Some("pdf") {
+        return false;
+    }
+    let (path, fragment) = src.split_once('#').unwrap_or((src, ""));
+    let path = path.trim_end();
+    let (mode, count) = PDF_CTX.with(|c| {
+        let c = c.borrow();
+        (c.mode, c.pages.get(path).copied())
+    });
+    if mode == PdfEmbedMode::Off {
+        return false;
+    }
+    if mode == PdfEmbedMode::Skip {
+        return true; // left out on purpose: nothing is shown
+    }
+    let Some(pages) = pdf_pages_selected(fragment, count) else {
+        return false;
+    };
+    let src = typst_string_val(path);
+    out.push('\n');
+    for page in pages {
+        let image = format!("image({src}, page: {page}, width: 100%, height: 100%, fit: \"contain\")");
+        match mode {
+            PdfEmbedMode::Full => out.push_str(&format!(
+                "#page(margin: 0pt, header: none, footer: none, background: none, foreground: none)[#{image}]\n"
+            )),
+            _ => out.push_str(&format!("#pagebreak(weak: true)\n#{image}\n")),
+        }
+    }
+    if mode == PdfEmbedMode::Fit {
+        out.push_str("#pagebreak(weak: true)\n");
+    }
+    true
+}
+
 thread_local! {
     /// `RenderOptions::filename_captions` for the current render call.
     static FILENAME_CAPTIONS: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
@@ -941,7 +1040,9 @@ fn render_inline(out: &mut String, inline: &Inline) {
             render_wikilink(out, target, fragment.as_deref(), text, *aliased);
         }
         Inline::Image { src, alt, width } => {
-            if is_unsupported_embed(src) {
+            if is_unsupported_embed(src) && render_pdf_embed(out, src) {
+                // A PDF annex, included page by page (Typst 0.14+).
+            } else if is_unsupported_embed(src) {
                 // Non-image embeds — PDFs, note transclusions, audio/video,
                 // Obsidian "Bases" (`![[x.base]]`, which the plugin renders to a
                 // table before this engine runs, so only the CLI gets here), etc.
@@ -1293,7 +1394,7 @@ fn in_range(idx: usize, range: Option<(usize, usize)>) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{parse_markdown, RenderOptions};
+    use crate::{parse_markdown, PdfEmbedMode, RenderOptions};
 
     fn render_callout(md: &str) -> String {
         let doc = parse_markdown(md);
@@ -1422,6 +1523,87 @@ mod tests {
         assert_eq!(width(900, None), "100%");
         assert_eq!(width(400, Some(800)), "50%");
         assert_eq!(width(400, Some(0)), "400pt");
+    }
+
+    fn pdf_out(md: &str, mode: PdfEmbedMode, pages: &[(&str, u32)]) -> String {
+        let opts = RenderOptions {
+            pdf_embeds: mode,
+            pdf_pages: pages.iter().map(|(p, n)| (p.to_string(), *n)).collect(),
+            ..Default::default()
+        };
+        render_typst(&parse_markdown(&format!("{md}\n")), None, &opts)
+    }
+
+    #[test]
+    fn pdf_embed_fit_gives_one_page_per_pdf_page_inside_the_margins() {
+        let out = pdf_out("![[annex.pdf]]", PdfEmbedMode::Fit, &[("annex.pdf", 3)]);
+        for p in 1..=3 {
+            assert!(out.contains(&format!("#image(\"annex.pdf\", page: {p}, width: 100%, height: 100%, fit: \"contain\")")), "{out}");
+        }
+        assert!(!out.contains("page: 4"), "{out}");
+        // A weak page break before each page, and one after the last.
+        assert_eq!(out.matches("#pagebreak(weak: true)\n#image(\"annex.pdf\"").count(), 3, "{out}");
+        assert!(out.contains("fit: \"contain\")\n#pagebreak(weak: true)\n"), "{out}");
+        assert!(!out.contains("[#image(\"annex.pdf\""), "{out}");
+    }
+
+    #[test]
+    fn pdf_embed_full_pages_drop_margins_header_and_footer() {
+        let out = pdf_out("![[annex.pdf]]", PdfEmbedMode::Full, &[("annex.pdf", 2)]);
+        assert_eq!(out.matches("#page(margin: 0pt, header: none, footer: none, background: none, foreground: none)[#image(").count(), 2, "{out}");
+        assert!(!out.contains("#pagebreak(weak: true)\n#image(\"annex.pdf\""), "{out}");
+    }
+
+    fn pdf_page_numbers(out: &str) -> Vec<u32> {
+        out.split("page: ").skip(1).filter_map(|t| t.split(',').next()?.parse().ok()).collect()
+    }
+
+    #[test]
+    fn pdf_embed_page_selections() {
+        let pages = |fragment: &str, count: &[(&str, u32)]| {
+            pdf_page_numbers(&pdf_out(&format!("![[annex.pdf#{fragment}]]"), PdfEmbedMode::Full, count))
+        };
+        // `page=3` starts at page 3 (as in Obsidian's viewer) and runs to the last page.
+        assert_eq!(pages("page=3", &[("annex.pdf", 5)]), vec![3, 4, 5]);
+        assert_eq!(pages("page=3&height=400", &[("annex.pdf", 5)]), vec![3, 4, 5]);
+        // A closed range needs no page count and is cut off at the real last page.
+        assert_eq!(pages("page=2-4", &[]), vec![2, 3, 4]);
+        assert_eq!(pages("page=3-3", &[]), vec![3]);
+        assert_eq!(pages("page=2-9", &[("annex.pdf", 4)]), vec![2, 3, 4]);
+        // A list names exactly the pages wanted, in the order written; spaces are fine.
+        assert_eq!(pages("page=3,5, 7", &[]), vec![3, 5, 7]);
+        assert_eq!(pages("page=2-3,7", &[]), vec![2, 3, 7]);
+        assert_eq!(pages("page=7,3", &[("annex.pdf", 5)]), vec![3]);
+    }
+
+    #[test]
+    fn pdf_embed_unclear_page_selections_stay_placeholders() {
+        // Open ranges are not supported; "to the last page" needs the page count.
+        for (fragment, count) in [
+            ("page=3-", Some(5)), ("page=-5", Some(5)), ("page=x", Some(5)), ("page=0", Some(5)),
+            ("page=3,", Some(5)), ("page=3,a", Some(5)), ("page=5-3", Some(5)), ("page=3", None), ("page=9", Some(5)),
+        ] {
+            let pages: Vec<(&str, u32)> = count.map(|n| ("annex.pdf", n)).into_iter().collect();
+            let out = pdf_out(&format!("![[annex.pdf#{fragment}]]"), PdfEmbedMode::Fit, &pages);
+            assert!(out.contains("Embed not supported:"), "{fragment}: {out}");
+        }
+    }
+
+    #[test]
+    fn pdf_embed_skip_shows_nothing() {
+        let out = pdf_out("Before\n\n![[annex.pdf]]\n\nAfter", PdfEmbedMode::Skip, &[("annex.pdf", 3)]);
+        assert!(!out.contains("Embed not supported:") && !out.contains("page: 1"), "{out}");
+        assert!(out.contains("Before") && out.contains("After"), "{out}");
+    }
+
+    #[test]
+    fn pdf_embed_stays_a_placeholder_when_off_or_pages_unknown() {
+        for out in [
+            pdf_out("![[annex.pdf]]", PdfEmbedMode::Off, &[("annex.pdf", 3)]),
+            pdf_out("![[annex.pdf]]", PdfEmbedMode::Fit, &[]),
+        ] {
+            assert!(out.contains("Embed not supported:") && !out.contains("page: 1"), "{out}");
+        }
     }
 
     #[test]

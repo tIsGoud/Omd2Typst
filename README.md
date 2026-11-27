@@ -327,6 +327,7 @@ set text(font: ("Your Serif Font", "Georgia", "Times New Roman", "Liberation Ser
 | Links | `[text](url)` | |
 | Images — standard | `![alt](path)` | |
 | Images — with width | `![alt\|200](path)` | Width in Obsidian pixels, converted to a share of the text width (see *Image sizes*). The alt text becomes the figure caption |
+| PDF embeds | `![[annex.pdf]]`, `![[annex.pdf#page=5,6,7]]` | Every page (or the selected pages) becomes a page of the document, so an annex keeps the page numbering and chapter headings. Included by the Obsidian plugin (Typst 0.14 or newer); the CLI shows a placeholder for now — see *PDF embeds* |
 | Images — wikilink | `![[path]]`, `![[path\|200]]`, `![[path\|200\|alt text]]`, `![[path\|alt text]]` | Obsidian's double bracket format. Width (`200` or `100x145`; the height is ignored) and alt text may come in any order. Without alt text there is no caption, unless `--filename-captions` is used |
 | Wikilinks `[[Note]]`, `[[Note\|alias]]`, `[[#Heading]]` | Rendered per `--wikilinks`: `text` (default), `bold`, `link`, `keep` — see below |
 | Code block | ` ```lang ``` ` | Language tag preserved for syntax highlighting |
@@ -355,6 +356,24 @@ With the default reference width of **700** (Obsidian's default *readable line l
 | `--image-reference-width 0` | Read the numbers as points (the behaviour before v0.17.0). |
 
 Only the proportion is converted: the height follows from the aspect ratio, and a `WxH` size uses the width.
+
+### PDF embeds
+
+A PDF embedded as `![[annex.pdf]]` can be included page by page: each PDF page becomes a page of the document (as a vector image), so an annex keeps the document's page numbering and the chapter headings that come before it. The Obsidian plugin does this (setting *PDF embeds*); the CLI cannot yet, because its embedded Typst is older than 0.14, the first Typst version that can include PDF pages. The CLI shows the "Embed not supported" placeholder, and the `.typ` produced for the plugin compiles with Typst 0.14 or newer.
+
+| Embed | Pages included |
+|---|---|
+| `![[annex.pdf]]` | all pages |
+| `![[annex.pdf#page=3]]` | page 3 through the last page, as in Obsidian, where `#page=3` is where the viewer starts |
+| `![[annex.pdf#page=2-4]]` | pages 2 to 4 |
+| `![[annex.pdf#page=3,5,7]]` | exactly pages 3, 5 and 7 (ranges can be mixed in: `#page=2-3,7`) |
+
+Two ways to place the pages, chosen by the plugin setting:
+
+- **Fit within the margins (default):** each PDF page sits on its own page of the document, scaled to fit inside the margins, keeping the document's header and footer.
+- **Full pages:** each PDF page fills a whole page, without margins, header, footer or background.
+
+Good to know: the chapter heading in front of a full-page annex sits alone on its page; bookmarks, links and form fields inside the PDF are not carried over; and an annex with a different page size is fitted onto the document's page size. In both modes the pages count in the document's page numbering.
 
 ### Callout types and icons
 
@@ -546,7 +565,8 @@ Both use the same conversion engine (`omd2typst-core`), so the Markdown they und
 | **Images** | Paths are resolved from the current directory | Resolved like Obsidian does: relative to the note, vault paths and shortest-path links |
 | **Mermaid diagrams** | — | ✓ (rendered by Obsidian) |
 | **Obsidian Bases embeds** (`![[x.base]]`) | Placeholder | ✓ (rendered as a table) |
-| **PDF, note and audio/video embeds** | Placeholder | Placeholder |
+| **PDF embeds** (`![[annex.pdf]]`, see *PDF embeds*) | Placeholder (needs Typst 0.14; the CLI embeds an older one) | ✓ Pages included inside the margins or as full pages |
+| **Note and audio/video embeds** | Placeholder | Placeholder |
 | **Frontmatter template** | — | *Insert frontmatter* command |
 | **Bundles** (folder with a note and all its images, see *Bundles and CI/CD*) | Converts them, also in CI/CD pipelines | Creates them (*Export as bundle*) |
 | **Scripts, CI/CD** | ✓ | — |

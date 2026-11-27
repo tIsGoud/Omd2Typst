@@ -1,5 +1,36 @@
 # Release Notes
 
+## v0.18.0 — PDF embeds
+
+**PDF pages in the document.** The engine can now include the pages of an
+embedded PDF (`![[annex.pdf]]`): every selected PDF page becomes a page of the
+document, as a vector image, so an annex keeps the document's page numbering
+and the chapter headings in front of it. It is an option of the engine (the
+Obsidian plugin has the matching setting); the compiled document needs
+**Typst 0.14 or newer**.
+
+- **Modes.** *Fit* puts every PDF page on its own page inside the margins,
+  keeping the document's header and footer. *Full* makes every PDF page a full
+  page without margins, header, footer or background. *Off* (the default) shows
+  the "Embed not supported" placeholder, and *skip* leaves the embed out.
+- **Page selection** (Obsidian's `#page=` syntax): `#page=3` is page 3 through
+  the last page (in Obsidian it is where the viewer starts), `#page=2-4` is
+  pages 2 to 4, and `#page=3,5,7` is exactly those pages (`#page=2-3,7` mixes
+  ranges in). A selection the engine cannot read, such as `#page=3-`, keeps the
+  placeholder. One embed can include at most 2000 pages.
+- **Page counts.** Typst cannot count the pages of a PDF, so the caller supplies
+  them (`pdf_pages`). A selection that runs to the last page, or an embed
+  without `#page=`, needs the count; closed ranges and lists do not.
+- **The CLI does not include PDFs yet**: its embedded Typst is 0.13, so it keeps
+  the placeholder. That follows with an upgrade of the embedded Typst.
+
+The WASM `render_to_typst` takes two new optional arguments, `pdf_embeds`
+(`off`, `skip`, `fit` or `full`) and `pdf_pages` (one `<count>\t<path>` line per
+PDF). The example documents in `input/` embed pages 5, 6 and 7 of
+`input/_assets/example.pdf`.
+
+---
+
 ## v0.17.1 — Tables, figure captions
 
 **Text below a table.** A text line directly under the last table row (no blank
