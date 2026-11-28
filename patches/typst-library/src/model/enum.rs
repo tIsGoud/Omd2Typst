@@ -1,25 +1,20 @@
 use std::str::FromStr;
 
-use ecow::eco_format;
 use smallvec::SmallVec;
 
-use crate::diag::{bail, SourceResult};
-use crate::engine::Engine;
+use crate::diag::{bail, warning};
 use crate::foundations::{
-    cast, elem, scope, Array, Content, NativeElement, Packed, Show, Smart, StyleChain,
-    Styles, TargetElem,
+    Array, Content, Packed, Reflect, Smart, Styles, cast, elem, scope,
 };
-use crate::html::{attr, tag, HtmlElem};
-use crate::layout::{Alignment, BlockElem, Em, HAlignment, Length, VAlignment, VElem};
-use crate::model::{
-    ListItemLike, ListLike, Numbering, NumberingPattern, ParElem, ParbreakElem,
-};
+use crate::introspection::{Locatable, Tagged};
+use crate::layout::{Alignment, Em, HAlignment, Length};
+use crate::model::{ListItemLike, ListLike, Numbering, NumberingPattern};
 
 /// A numbered list.
 ///
 /// Displays a sequence of items vertically and numbers them consecutively.
 ///
-/// # Example
+/// = Example <example>
 /// ```example
 /// Automatically numbered:
 /// + Preparations
@@ -42,6 +37,7 @@ use crate::model::{
 ///
 /// You can easily switch all your enumerations to a different numbering style
 /// with a set rule.
+///
 /// ```example
 /// #set enum(numbering: "a)")
 ///
@@ -49,8 +45,8 @@ use crate::model::{
 /// + Don't forget step two
 /// ```
 ///
-/// You can also use [`enum.item`]($enum.item) to programmatically customize the
-/// number of each item in the enumeration:
+/// You can also use @enum.item to programmatically customize the number of each
+/// item in the enumeration:
 ///
 /// ```example
 /// #enum(
@@ -60,7 +56,7 @@ use crate::model::{
 /// )
 /// ```
 ///
-/// # Syntax
+/// = Syntax <syntax>
 /// This functions also has dedicated syntax:
 ///
 /// - Starting a line with a plus sign creates an automatically numbered
@@ -71,12 +67,12 @@ use crate::model::{
 /// Enumeration items can contain multiple paragraphs and other block-level
 /// content. All content that is indented more than an item's marker becomes
 /// part of that item.
-#[elem(scope, title = "Numbered List", Show)]
+#[elem(scope, title = "Numbered List", Locatable, Tagged)]
 pub struct EnumElem {
-    /// Defines the default [spacing]($enum.spacing) of the enumeration. If it
-    /// is `{false}`, the items are spaced apart with
-    /// [paragraph spacing]($par.spacing). If it is `{true}`, they use
-    /// [paragraph leading]($par.leading) instead. This makes the list more
+    /// Defines the default @enum.spacing[spacing] of the enumeration. If it is
+    /// `{false}`, the items are spaced apart with
+    /// @par.spacing[paragraph spacing]. If it is `{true}`, they use
+    /// @par.leading[paragraph leading] instead. This makes the list more
     /// compact, which can look better if the items are short.
     ///
     /// In markup mode, the value of this parameter is determined based on
@@ -98,7 +94,7 @@ pub struct EnumElem {
     pub tight: bool,
 
     /// How to number the enumeration. Accepts a
-    /// [numbering pattern or function]($numbering).
+    /// @numbering[numbering pattern or function].
     ///
     /// If the numbering pattern contains multiple counting symbols, they apply
     /// to nested enums. If given a function, the function receives one argument
@@ -117,7 +113,6 @@ pub struct EnumElem {
     /// + Numbering!
     /// ```
     #[default(Numbering::Pattern(NumberingPattern::from_str("1.").unwrap()))]
-    #[borrowed]
     pub numbering: Numbering,
 
     /// Which number to start the enumeration with.
@@ -129,11 +124,10 @@ pub struct EnumElem {
     ///   [Ahead],
     /// )
     /// ```
-    pub start: Smart<usize>,
+    pub start: Smart<u64>,
 
-    /// Whether to display the full numbering, including the numbers of
-    /// all parent enumerations.
-    ///
+    /// Whether to display the full numbering, including the numbers of all
+    /// parent enumerations.
     ///
     /// ```example
     /// #set enum(numbering: "1.a)", full: true)
@@ -157,34 +151,43 @@ pub struct EnumElem {
     pub reversed: bool,
 
     /// The indentation of each item.
-    #[resolve]
     pub indent: Length,
 
     /// The space between the numbering and the body of each item.
-    #[resolve]
     #[default(Em::new(0.5).into())]
     pub body_indent: Length,
 
     /// The spacing between the items of the enumeration.
     ///
-    /// If set to `{auto}`, uses paragraph [`leading`]($par.leading) for tight
-    /// enumerations and paragraph [`spacing`]($par.spacing) for wide
-    /// (non-tight) enumerations.
+    /// If set to `{auto}`, uses paragraph @par.leading[`leading`] for tight
+    /// enumerations and paragraph @par.spacing[`spacing`] for wide (non-tight)
+    /// enumerations.
     pub spacing: Smart<Length>,
 
     /// The alignment that enum numbers should have.
     ///
-    /// By default, this is set to `{end + top}`, which aligns enum numbers
-    /// towards end of the current text direction (in left-to-right script,
-    /// for example, this is the same as `{right}`) and at the top of the line.
+    /// By default, this is set to `{end}`, which aligns enum numbers
+    /// horizontally towards the end of the current text direction (in a
+    /// left-to-right script, for example, this is the same as `{right}`). In
+    /// addition, the lack of a vertical alignment places each number vertically
+    /// just above the baseline of the item, as if it were part of its first
+    /// line of text.
+    ///
     /// The choice of `{end}` for horizontal alignment of enum numbers is
     /// usually preferred over `{start}`, as numbers then grow away from the
-    /// text instead of towards it, avoiding certain visual issues. This option
-    /// lets you override this behaviour, however. (Also to note is that the
-    /// [unordered list]($list) uses a different method for this, by giving the
-    /// `marker` content an alignment directly.).
+    /// text instead of towards it. This option lets you override this
+    /// behaviour, however.
     ///
-    /// ````example
+    /// As for vertical alignment, it can be overridden if baseline alignment is
+    /// not desired. For example, an alignment of `{end + top}` would always
+    /// place the marker vertically near the top of the item, whereas `{end +
+    /// bottom}` would move it near the bottom.
+    ///
+    /// Also to note is that the @list[unordered list] possesses a similar
+    /// option named `marker-align` instead, which also controls both axes of
+    /// marker alignment in the exact same way as `enum` numbers.
+    ///
+    /// ```example
     /// #set enum(number-align: start + bottom)
     ///
     /// Here are some powers of two:
@@ -194,8 +197,8 @@ pub struct EnumElem {
     /// 8. Eight
     /// 16. Sixteen
     /// 32. Thirty two
-    /// ````
-    #[default(HAlignment::End + VAlignment::Top)]
+    /// ```
+    #[default(Alignment::H(HAlignment::End))]
     pub number_align: Alignment,
 
     /// The numbered list's items.
@@ -211,13 +214,26 @@ pub struct EnumElem {
     /// ) [+ #phase]
     /// ```
     #[variadic]
+    #[parse(
+        for item in args.items.iter() {
+            if item.name.is_none() && Array::castable(&item.value.v) {
+                engine.sink.warn(warning!(
+                    item.value.span,
+                    "implicit conversion from array to `enum.item` is deprecated";
+                    hint: "use `enum.item(number)[body]` instead";
+                    hint: "this conversion was never documented and is being phased out";
+                ));
+            }
+        }
+        args.all()?
+    )]
     pub children: Vec<Packed<EnumItem>>,
 
     /// The numbers of parent items.
     #[internal]
     #[fold]
     #[ghost]
-    pub parents: SmallVec<[usize; 4]>,
+    pub parents: SmallVec<[u64; 4]>,
 }
 
 #[scope]
@@ -226,55 +242,12 @@ impl EnumElem {
     type EnumItem;
 }
 
-impl Show for Packed<EnumElem> {
-    fn show(&self, engine: &mut Engine, styles: StyleChain) -> SourceResult<Content> {
-        let tight = self.tight(styles);
-
-        if TargetElem::target_in(styles).is_html() {
-            let mut elem = HtmlElem::new(tag::ol);
-            if self.reversed(styles) {
-                elem = elem.with_attr(attr::reversed, "reversed");
-            }
-            if let Some(n) = self.start(styles).custom() {
-                elem = elem.with_attr(attr::start, eco_format!("{n}"));
-            }
-            let body = Content::sequence(self.children.iter().map(|item| {
-                let mut li = HtmlElem::new(tag::li);
-                if let Some(nr) = item.number(styles) {
-                    li = li.with_attr(attr::value, eco_format!("{nr}"));
-                }
-                // Text in wide enums shall always turn into paragraphs.
-                let mut body = item.body.clone();
-                if !tight {
-                    body += ParbreakElem::shared();
-                }
-                li.with_body(Some(body)).pack().spanned(item.span())
-            }));
-            return Ok(elem.with_body(Some(body)).pack().spanned(self.span()));
-        }
-
-        let mut realized =
-            BlockElem::multi_layouter(self.clone(), engine.routines.layout_enum)
-                .pack()
-                .spanned(self.span());
-
-        if tight {
-            let leading = ParElem::leading_in(styles);
-            let spacing =
-                VElem::new(leading.into()).with_weak(true).with_attach(true).pack();
-            realized = spacing + realized;
-        }
-
-        Ok(realized)
-    }
-}
-
 /// An enumeration item.
-#[elem(name = "item", title = "Numbered List Item")]
+#[elem(name = "item", title = "Numbered List Item", Tagged)]
 pub struct EnumItem {
     /// The item's number.
     #[positional]
-    pub number: Option<usize>,
+    pub number: Smart<u64>,
 
     /// The item's body.
     #[required]

@@ -1,44 +1,43 @@
 use comemo::{Track, Tracked, TrackedMut};
-use ecow::{eco_format, eco_vec, EcoString, EcoVec};
+use ecow::{EcoString, EcoVec, eco_format, eco_vec};
 use typst_syntax::Span;
+use typst_utils::{LazyHash, Protected};
 
-use crate::diag::{bail, At, SourceResult};
+use crate::diag::{At, SourceDiagnostic, SourceResult, bail, warning};
 use crate::engine::{Engine, Route, Sink, Traced};
 use crate::foundations::{
-    cast, elem, func, scope, select_where, ty, Args, Construct, Content, Context, Func,
-    LocatableSelector, NativeElement, Packed, Repr, Selector, Show, Str, StyleChain,
-    Value,
+    Args, Construct, Content, Context, Func, LocatableSelector, NativeElement, Repr,
+    Selector, Str, Value, cast, elem, func, scope, select_where, ty,
 };
-use crate::introspection::{Introspector, Locatable, Location};
-use crate::routines::Routines;
-use crate::World;
+use crate::introspection::{History, Introspect, Introspector, Locatable, Location};
+use crate::{Library, World};
 
 /// Manages stateful parts of your document.
 ///
 /// Let's say you have some computations in your document and want to remember
 /// the result of your last computation to use it in the next one. You might try
-/// something similar to the code below and expect it to output 10, 13, 26, and
-/// 21. However this **does not work** in Typst. If you test this code, you will
-/// see that Typst complains with the following error message: _Variables from
-/// outside the function are read-only and cannot be modified._
+/// something similar to the code below and expect it to output 10, 13, 26,
+/// and 21. However this *does not work* in Typst. If you test this code, you
+/// will see that Typst complains with the following error message: _Variables
+/// from outside the function are read-only and cannot be modified._
 ///
 /// ```typ
 /// // This doesn't work!
-/// #let x = 0
+/// #let star = 0
 /// #let compute(expr) = {
-///   x = eval(
-///     expr.replace("x", str(x))
+///   star = eval(
+///     expr.replace("⭐", str(star))
 ///   )
-///   [New value is #x. ]
+///   [New value is #star.]
 /// }
 ///
 /// #compute("10") \
-/// #compute("x + 3") \
-/// #compute("x * 2") \
-/// #compute("x - 5")
+/// #compute("⭐ + 3") \
+/// #compute("⭐ * 2") \
+/// #compute("⭐ - 5")
 /// ```
 ///
-/// # State and document markup { #state-and-markup }
+/// = #short-or-long[State And Markup][State and document markup] <state-and-markup>
 /// Why does it do that? Because, in general, this kind of computation with side
 /// effects is problematic in document markup and Typst is upfront about that.
 /// For the results to make sense, the computation must proceed in the same
@@ -69,18 +68,18 @@ use crate::World;
 /// `template` function and only then sees the `Outline`. Just counting up would
 /// number the `Introduction` with `1` and the `Outline` with `2`.
 ///
-/// # Managing state in Typst { #state-in-typst }
+/// = #short-or-long[State In Typst][Managing state in Typst] <state-in-typst>
 /// So what do we do instead? We use Typst's state management system. Calling
 /// the `state` function with an identifying string key and an optional initial
 /// value gives you a state value which exposes a few functions. The two most
 /// important ones are `get` and `update`:
 ///
-/// - The [`get`]($state.get) function retrieves the current value of the state.
+/// - The @state.get[`get`] function retrieves the current value of the state.
 ///   Because the value can vary over the course of the document, it is a
-///   _contextual_ function that can only be used when [context]($context) is
-///   available.
+///   _contextual_ function that can only be used when
+///   @reference:context[context] is available.
 ///
-/// - The [`update`]($state.update) function modifies the state. You can give it
+/// - The @state.update[`update`] function modifies the state. You can give it
 ///   any value. If given a non-function value, it sets the state to that value.
 ///   If given a function, that function receives the previous state and has to
 ///   return the new state.
@@ -88,18 +87,18 @@ use crate::World;
 /// Our initial example would now look like this:
 ///
 /// ```example
-/// #let s = state("x", 0)
-/// #let compute(expr) = [
-///   #s.update(x =>
-///     eval(expr.replace("x", str(x)))
+/// #let star = state("star", 0)
+/// #let compute(expr) = {
+///   star.update(old =>
+///     eval(expr.replace("⭐", str(old)))
 ///   )
-///   New value is #context s.get().
-/// ]
+///   [New value is #context star.get().]
+/// }
 ///
 /// #compute("10") \
-/// #compute("x + 3") \
-/// #compute("x * 2") \
-/// #compute("x - 5")
+/// #compute("⭐ + 3") \
+/// #compute("⭐ * 2") \
+/// #compute("⭐ - 5")
 /// ```
 ///
 /// State managed by Typst is always updated in layout order, not in evaluation
@@ -110,30 +109,30 @@ use crate::World;
 /// but they still show the correct results:
 ///
 /// ```example
-/// >>> #let s = state("x", 0)
-/// >>> #let compute(expr) = [
-/// >>>   #s.update(x =>
-/// >>>     eval(expr.replace("x", str(x)))
+/// >>> #let star = state("star", 0)
+/// >>> #let compute(expr) = {
+/// >>>   star.update(old =>
+/// >>>     eval(expr.replace("⭐", str(old)))
 /// >>>   )
-/// >>>   New value is #context s.get().
-/// >>> ]
+/// >>>   [New value is #context star.get().]
+/// >>> }
 /// <<< ...
 ///
 /// #let more = [
-///   #compute("x * 2") \
-///   #compute("x - 5")
+///   #compute("⭐ * 2") \
+///   #compute("⭐ - 5")
 /// ]
 ///
 /// #compute("10") \
-/// #compute("x + 3") \
+/// #compute("⭐ + 3") \
 /// #more
 /// ```
 ///
 /// This example is of course a bit silly, but in practice this is often exactly
 /// what you want! A good example are heading counters, which is why Typst's
-/// [counting system]($counter) is very similar to its state system.
+/// @counter[counting system] is very similar to its state system.
 ///
-/// # Time Travel
+/// = Time Travel <time-travel>
 /// By using Typst's state management system you also get time travel
 /// capabilities! We can find out what the value of the state will be at any
 /// position in the document from anywhere else. In particular, the `at` method
@@ -141,26 +140,26 @@ use crate::World;
 /// methods gives us the value of the state at the end of the document.
 ///
 /// ```example
-/// >>> #let s = state("x", 0)
-/// >>> #let compute(expr) = [
-/// >>>   #s.update(x => {
-/// >>>     eval(expr.replace("x", str(x)))
-/// >>>   })
-/// >>>   New value is #context s.get().
-/// >>> ]
+/// >>> #let star = state("star", 0)
+/// >>> #let compute(expr) = {
+/// >>>   star.update(old =>
+/// >>>     eval(expr.replace("⭐", str(old)))
+/// >>>   )
+/// >>>   [New value is #context star.get().]
+/// >>> }
 /// <<< ...
 ///
 /// Value at `<here>` is
-/// #context s.at(<here>)
+/// #context star.at(<here>)
 ///
 /// #compute("10") \
-/// #compute("x + 3") \
+/// #compute("⭐ + 3") \
 /// *Here.* <here> \
-/// #compute("x * 2") \
-/// #compute("x - 5")
+/// #compute("⭐ * 2") \
+/// #compute("⭐ - 5")
 /// ```
 ///
-/// # A word of caution { #caution }
+/// = #short-or-long[Caution][A word of caution] <caution>
 /// To resolve the values of all states, Typst evaluates parts of your code
 /// multiple times. However, there is no guarantee that your state manipulation
 /// can actually be completely resolved.
@@ -172,12 +171,15 @@ use crate::World;
 /// should be `3`, and so on. This example displays a finite value because Typst
 /// simply gives up after a few attempts.
 ///
-/// ```example
-/// // This is bad!
-/// #let s = state("x", 1)
-/// #context s.update(s.final() + 1)
-/// #context s.get()
-/// ```
+/// #example(
+///   ```
+///   // This is bad!
+///   #let x = state("key", 1)
+///   #context x.update(x.final() + 1)
+///   #context x.get()
+///   ```,
+///   warnings: false,
+/// )
 ///
 /// In general, you should try not to generate state updates from within context
 /// expressions. If possible, try to express your updates as non-contextual
@@ -199,72 +201,14 @@ impl State {
         Self { key, init }
     }
 
-    /// Get the value of the state at the given location.
-    pub fn at_loc(&self, engine: &mut Engine, loc: Location) -> SourceResult<Value> {
-        let sequence = self.sequence(engine)?;
-        let offset = engine.introspector.query_count_before(&self.selector(), loc);
-        Ok(sequence[offset].clone())
-    }
-
-    /// Produce the whole sequence of states.
-    ///
-    /// This has to happen just once for all states, cutting down the number
-    /// of state updates from quadratic to linear.
-    fn sequence(&self, engine: &mut Engine) -> SourceResult<EcoVec<Value>> {
-        self.sequence_impl(
-            engine.routines,
-            engine.world,
-            engine.introspector,
-            engine.traced,
-            TrackedMut::reborrow_mut(&mut engine.sink),
-            engine.route.track(),
-        )
-    }
-
-    /// Memoized implementation of `sequence`.
-    #[comemo::memoize]
-    fn sequence_impl(
-        &self,
-        routines: &Routines,
-        world: Tracked<dyn World + '_>,
-        introspector: Tracked<Introspector>,
-        traced: Tracked<Traced>,
-        sink: TrackedMut<Sink>,
-        route: Tracked<Route>,
-    ) -> SourceResult<EcoVec<Value>> {
-        let mut engine = Engine {
-            routines,
-            world,
-            introspector,
-            traced,
-            sink,
-            route: Route::extend(route).unnested(),
-        };
-        let mut state = self.init.clone();
-        let mut stops = eco_vec![state.clone()];
-
-        for elem in introspector.query(&self.selector()) {
-            let elem = elem.to_packed::<StateUpdateElem>().unwrap();
-            match &elem.update {
-                StateUpdate::Set(value) => state = value.clone(),
-                StateUpdate::Func(func) => {
-                    state = func.call(&mut engine, Context::none().track(), [state])?
-                }
-            }
-            stops.push(state.clone());
-        }
-
-        Ok(stops)
-    }
-
     /// The selector for this state's updates.
-    fn selector(&self) -> Selector {
-        select_where!(StateUpdateElem, Key => self.key.clone())
+    pub fn select(&self) -> Selector {
+        select_where!(StateUpdateElem, key => self.key.clone())
     }
 
     /// Selects all state updates.
     pub fn select_any() -> Selector {
-        StateUpdateElem::elem().select()
+        StateUpdateElem::ELEM.select()
     }
 }
 
@@ -274,8 +218,31 @@ impl State {
     #[func(constructor)]
     pub fn construct(
         /// The key that identifies this state.
+        ///
+        /// Any @state.update[updates] to the state will be identified with the
+        /// string key. If you construct multiple states with the same `key`,
+        /// then updating any one will affect all of them.
         key: Str,
         /// The initial value of the state.
+        ///
+        /// If you construct multiple states with the same `key` but different
+        /// `init` values, they will each use their own initial value but share
+        /// updates. Specifically, the value of a state at some location in the
+        /// document will be computed from that state's initial value and all
+        /// preceding updates for the state's key.
+        ///
+        /// ```example
+        /// #let banana = state("key", "🍌")
+        /// #let broccoli = state("key", "🥦")
+        ///
+        /// #banana.update(it => it + "😋")
+        ///
+        /// #context [
+        ///   - #state("key", "🍎").get()
+        ///   - #banana.get()
+        ///   - #broccoli.get()
+        /// ]
+        /// ```
         #[default]
         init: Value,
     ) -> State {
@@ -294,14 +261,14 @@ impl State {
         span: Span,
     ) -> SourceResult<Value> {
         let loc = context.location().at(span)?;
-        self.at_loc(engine, loc)
+        engine.introspect(StateAtIntrospection(self.clone(), loc, span))
     }
 
     /// Retrieves the value of the state at the given selector's unique match.
     ///
     /// The `selector` must match exactly one element in the document. The most
-    /// useful kinds of selectors for this are [labels]($label) and
-    /// [locations]($location).
+    /// useful kinds of selectors for this are @label[labels] and
+    /// @location[locations].
     #[typst_macros::time(name = "state.at", span = span)]
     #[func(contextual)]
     pub fn at(
@@ -312,8 +279,8 @@ impl State {
         /// The place at which the state's value should be retrieved.
         selector: LocatableSelector,
     ) -> SourceResult<Value> {
-        let loc = selector.resolve_unique(engine.introspector, context).at(span)?;
-        self.at_loc(engine, loc)
+        let loc = selector.resolve_unique(engine, context, span)?;
+        engine.introspect(StateAtIntrospection(self.clone(), loc, span))
     }
 
     /// Retrieves the value of the state at the end of the document.
@@ -325,25 +292,75 @@ impl State {
         span: Span,
     ) -> SourceResult<Value> {
         context.introspect().at(span)?;
-        let sequence = self.sequence(engine)?;
-        Ok(sequence.last().unwrap().clone())
+        engine.introspect(StateFinalIntrospection(self.clone(), span))
     }
 
-    /// Update the value of the state.
+    /// Updates the value of the state.
     ///
-    /// The update will be in effect at the position where the returned content
-    /// is inserted into the document. If you don't put the output into the
-    /// document, nothing happens! This would be the case, for example, if you
-    /// write `{let _ = state("key").update(7)}`. State updates are always
-    /// applied in layout order and in that case, Typst wouldn't know when to
-    /// update the state.
+    /// Returns an invisible piece of @content[content] that must be inserted
+    /// into the document to take effect. This invisible content tells Typst
+    /// that the specified update should take place wherever the content is
+    /// inserted into the document.
+    ///
+    /// State is a part of your document and runs like a thread embedded in the
+    /// document content. The value of a state is the result of all state
+    /// updates that happened in the document up until that point.
+    ///
+    /// That's why `state.update` returns an invisible sliver of content that
+    /// you need to return and include in the document — a state update that is
+    /// not "placed" in the document does not happen, and "when" it happens is
+    /// determined by where you place it. That's also why you need
+    /// @reference:context[context] to read state: You need to use the current
+    /// document position to know where on the state's "thread" you are.
+    ///
+    /// Storing a state update in a variable (e.g.
+    /// `{let my-update = state("key").update(c => c * 2)}`) will have no effect
+    /// by itself. Only once you insert the variable `[#my-update]` somewhere
+    /// into the document content, the update will take effect — at the position
+    /// where it was inserted. You can also use `[#my-update]` multiple times at
+    /// different positions. Then, the update will take effect multiple times as
+    /// well.
+    ///
+    /// In contrast to @state.get[`get`], @state.at[`at`], and
+    /// @state.final[`final`], this function does not require
+    /// @reference:context[context]. This is because, to create the state
+    /// update, we do not need to know where in the document we are. We only
+    /// need this information to resolve the state's value.
     #[func]
     pub fn update(
         self,
         span: Span,
-        /// If given a non function-value, sets the state to that value. If
-        /// given a function, that function receives the previous state and has
-        /// to return the new state.
+        /// A value to update to or a function to update with.
+        ///
+        /// - If given a non-function value, sets the state to that value.
+        /// - If given a function, that function receives the state's previous
+        ///   value and has to return the state's new value.
+        ///
+        /// When updating the state based on its previous value, you should
+        /// prefer the function form instead of retrieving the previous value
+        /// from the @reference:context[context]. This allows the compiler to
+        /// resolve the final state efficiently, minimizing the number of
+        /// @reference:context:compiler-iterations[layout iterations] required.
+        ///
+        /// In the following example, `{fill.update(f => not f)}` will paint odd
+        /// @list.item[items in the bullet list] as expected. However, if it's
+        /// replaced with `{context fill.update(not fill.get())}`, then layout
+        /// will not converge within 5 attempts, as each update will take one
+        /// additional iteration to propagate.
+        ///
+        /// ```example
+        /// #let fill = state("fill", false)
+        ///
+        /// #show list.item: it => {
+        ///   fill.update(f => not f)
+        ///   context {
+        ///     set text(fill: fuchsia) if fill.get()
+        ///     it
+        ///   }
+        /// }
+        ///
+        /// #lorem(5).split().map(list.item).join()
+        /// ```
         update: StateUpdate,
     ) -> Content {
         StateUpdateElem::new(self.key, update).pack().spanned(span)
@@ -371,9 +388,9 @@ cast! {
     v: Value => Self::Set(v),
 }
 
-/// Executes a display of a state.
-#[elem(Construct, Locatable, Show)]
-struct StateUpdateElem {
+/// Executes an update of a state.
+#[elem(Construct, Locatable)]
+pub struct StateUpdateElem {
     /// The key that identifies the state.
     #[required]
     key: Str,
@@ -390,8 +407,118 @@ impl Construct for StateUpdateElem {
     }
 }
 
-impl Show for Packed<StateUpdateElem> {
-    fn show(&self, _: &mut Engine, _: StyleChain) -> SourceResult<Content> {
-        Ok(Content::empty())
+/// Retrieves a state at a specific location.
+#[derive(Debug, Clone, PartialEq, Hash)]
+struct StateAtIntrospection(State, Location, Span);
+
+impl Introspect for StateAtIntrospection {
+    type Output = SourceResult<Value>;
+
+    fn introspect(
+        &self,
+        engine: &mut Engine,
+        introspector: Tracked<dyn Introspector + '_>,
+    ) -> Self::Output {
+        let Self(state, loc, _) = self;
+        let sequence = sequence(state, engine, introspector)?;
+        let offset = introspector.query_count_before(&state.select(), *loc);
+        Ok(sequence[offset].clone())
     }
+
+    fn diagnose(&self, history: &History<Self::Output>) -> SourceDiagnostic {
+        format_convergence_warning(&self.0, self.2, history)
+    }
+}
+
+/// Retrieves the final value of a state.
+#[derive(Debug, Clone, PartialEq, Hash)]
+struct StateFinalIntrospection(State, Span);
+
+impl Introspect for StateFinalIntrospection {
+    type Output = SourceResult<Value>;
+
+    fn introspect(
+        &self,
+        engine: &mut Engine,
+        introspector: Tracked<dyn Introspector + '_>,
+    ) -> Self::Output {
+        let sequence = sequence(&self.0, engine, introspector)?;
+        Ok(sequence.last().unwrap().clone())
+    }
+
+    fn diagnose(&self, history: &History<Self::Output>) -> SourceDiagnostic {
+        format_convergence_warning(&self.0, self.1, history)
+    }
+}
+
+/// Produces the whole sequence of a state.
+///
+/// Due to memoization, this has to happen just once for all retrievals of the
+/// same state, cutting down the number of computations from quadratic to
+/// linear.
+fn sequence(
+    state: &State,
+    engine: &mut Engine,
+    introspector: Tracked<dyn Introspector + '_>,
+) -> SourceResult<EcoVec<Value>> {
+    sequence_impl(
+        state,
+        engine.world,
+        engine.library,
+        introspector,
+        engine.traced,
+        TrackedMut::reborrow_mut(&mut engine.sink),
+        engine.route.track(),
+    )
+}
+
+/// Memoized implementation of `sequence`.
+#[comemo::memoize]
+fn sequence_impl(
+    state: &State,
+    world: Tracked<dyn World + '_>,
+    library: &LazyHash<Library>,
+    introspector: Tracked<dyn Introspector + '_>,
+    traced: Tracked<Traced>,
+    sink: TrackedMut<Sink>,
+    route: Tracked<Route>,
+) -> SourceResult<EcoVec<Value>> {
+    let mut engine = Engine {
+        library,
+        world,
+        introspector: Protected::from_raw(introspector),
+        traced,
+        sink,
+        route: Route::extend(route).unnested(),
+    };
+
+    let mut current = state.init.clone();
+    let mut stops = eco_vec![current.clone()];
+
+    for elem in introspector.query(&state.select()) {
+        let elem = elem.to_packed::<StateUpdateElem>().unwrap();
+        match &elem.update {
+            StateUpdate::Set(value) => current = value.clone(),
+            StateUpdate::Func(func) => {
+                current = func.call(&mut engine, Context::none().track(), [current])?
+            }
+        }
+        stops.push(current.clone());
+    }
+
+    Ok(stops)
+}
+
+/// The warning when a state failed to converge.
+fn format_convergence_warning(
+    state: &State,
+    span: Span,
+    history: &History<SourceResult<Value>>,
+) -> SourceDiagnostic {
+    warning!(span, "value of `state({})` did not converge", state.key.repr())
+        .with_hint(history.hint("values", |ret| match ret {
+            Ok(v) => eco_format!("`{}`", v.repr()),
+            Err(_) => "(errored)".into(),
+        }))
+        .with_hint("see https://typst.app/help/state-convergence for help")
 }

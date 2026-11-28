@@ -1,19 +1,18 @@
-use crate::diag::SourceResult;
-use crate::engine::Engine;
-use crate::foundations::{elem, Content, NativeElement, Packed, Show, StyleChain};
-use crate::layout::{BlockElem, Length};
+use crate::foundations::{Content, elem};
+use crate::introspection::Tagged;
+use crate::layout::Length;
 
 /// Repeats content to the available space.
 ///
 /// This can be useful when implementing a custom index, reference, or outline.
 ///
 /// Space may be inserted between the instances of the body parameter, so be
-/// sure to adjust the [`justify`]($repeat.justify) parameter accordingly.
+/// sure to adjust the @repeat.justify[`justify`] parameter accordingly.
 ///
 /// Errors if there are no bounds on the available space, as it would create
 /// infinite content.
 ///
-/// # Example
+/// = Example <example>
 /// ```example
 /// Sign on the dotted line:
 /// #box(width: 1fr, repeat[.])
@@ -24,7 +23,12 @@ use crate::layout::{BlockElem, Length};
 ///   Berlin, the 22nd of December, 2022
 /// ]
 /// ```
-#[elem(Show)]
+///
+/// = Accessibility <accessibility>
+/// Repeated content is automatically marked as an @pdf.artifact[artifact] and
+/// hidden from Assistive Technology (AT). Do not use this function to create
+/// content that contributes to the meaning of your document.
+#[elem(Tagged)]
 pub struct RepeatElem {
     /// The content to repeat.
     #[required]
@@ -38,12 +42,4 @@ pub struct RepeatElem {
     /// available space.
     #[default(true)]
     pub justify: bool,
-}
-
-impl Show for Packed<RepeatElem> {
-    fn show(&self, engine: &mut Engine, _: StyleChain) -> SourceResult<Content> {
-        Ok(BlockElem::single_layouter(self.clone(), engine.routines.layout_repeat)
-            .pack()
-            .spanned(self.span()))
-    }
 }

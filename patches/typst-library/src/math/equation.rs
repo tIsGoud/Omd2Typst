@@ -1,35 +1,34 @@
 use std::num::NonZeroUsize;
 
+use codex::styling::MathVariant;
+use ecow::EcoString;
 use typst_utils::NonZeroExt;
-use unicode_math_class::MathClass;
 
 use crate::diag::SourceResult;
 use crate::engine::Engine;
 use crate::foundations::{
-    elem, Content, NativeElement, Packed, Show, ShowSet, Smart, StyleChain, Styles,
-    Synthesize,
+    Content, NativeElement, Packed, ShowSet, Smart, StyleChain, Styles, Synthesize, elem,
 };
-use crate::introspection::{Count, Counter, CounterUpdate, Locatable};
+use crate::introspection::{Count, Counter, CounterUpdate, Locatable, Tagged};
 use crate::layout::{
-    AlignElem, Alignment, BlockElem, InlineElem, OuterHAlignment, SpecificAlignment,
-    VAlignment,
+    AlignElem, Alignment, BlockElem, OuterHAlignment, SpecificAlignment, VAlignment,
 };
-use crate::math::{MathSize, MathVariant};
+use crate::math::MathSize;
 use crate::model::{Numbering, Outlinable, ParLine, Refable, Supplement};
-use crate::text::{FontFamily, FontList, FontWeight, LocalName, TextElem};
+use crate::text::{FontFamily, FontList, FontWeight, LocalName, Locale, TextElem};
 
 /// A mathematical equation.
 ///
 /// Can be displayed inline with text or as a separate block. An equation
-/// becomes block-level through the presence of at least one space after the
-/// opening dollar sign and one space before the closing dollar sign.
+/// becomes block-level through the presence of whitespace after the opening
+/// dollar sign and whitespace before the closing dollar sign.
 ///
-/// # Example
+/// = Example <example>
 /// ```example
 /// #set text(font: "New Computer Modern")
 ///
 /// Let $a$, $b$, and $c$ be the side
-/// lengths of right-angled triangle.
+/// lengths of a right-angled triangle.
 /// Then, we know that:
 /// $ a^2 + b^2 = c^2 $
 ///
@@ -40,19 +39,19 @@ use crate::text::{FontFamily, FontList, FontWeight, LocalName, TextElem};
 /// By default, block-level equations will not break across pages. This can be
 /// changed through `{show math.equation: set block(breakable: true)}`.
 ///
-/// # Syntax
+/// = Syntax <syntax>
 /// This function also has dedicated syntax: Write mathematical markup within
-/// dollar signs to create an equation. Starting and ending the equation with at
-/// least one space lifts it into a separate block that is centered
-/// horizontally. For more details about math syntax, see the
-/// [main math page]($category/math).
-#[elem(Locatable, Synthesize, Show, ShowSet, Count, LocalName, Refable, Outlinable)]
+/// dollar signs to create an equation. Starting and ending the equation with
+/// whitespace lifts it into a separate block that is centered horizontally. For
+/// more details about math syntax, see the @math[main math page].
+#[elem(Locatable, Tagged, Synthesize, ShowSet, Count, LocalName, Refable, Outlinable)]
 pub struct EquationElem {
     /// Whether the equation is displayed as a separate block.
     #[default(false)]
     pub block: bool,
 
-    /// How to [number]($numbering) block-level equations.
+    /// How to number block-level equations. Accepts a
+    /// @numbering[numbering pattern or function] taking a single number.
     ///
     /// ```example
     /// #set math.equation(numbering: "(1)")
@@ -63,15 +62,14 @@ pub struct EquationElem {
     /// With @ratio, we get:
     /// $ F_n = floor(1 / sqrt(5) phi.alt^n) $
     /// ```
-    #[borrowed]
     pub numbering: Option<Numbering>,
 
     /// The alignment of the equation numbering.
     ///
     /// By default, the alignment is `{end + horizon}`. For the horizontal
-    /// component, you can use `{right}`, `{left}`, or `{start}` and `{end}`
-    /// of the text direction; for the vertical component, you can use
-    /// `{top}`, `{horizon}`, or `{bottom}`.
+    /// component, you can use `{right}`, `{left}`, or `{start}` and `{end}` of
+    /// the text direction; for the vertical component, you can use `{top}`,
+    /// `{horizon}`, or `{bottom}`.
     ///
     /// ```example
     /// #set math.equation(numbering: "(1)", number-align: bottom)
@@ -101,6 +99,22 @@ pub struct EquationElem {
     /// ```
     pub supplement: Smart<Option<Supplement>>,
 
+    /// An alternative description of the mathematical equation.
+    ///
+    /// This should describe the full equation in natural language and will be
+    /// made available to Assistive Technology. You can learn more in the
+    /// @guides:accessibility:textual-representations[Textual Representations
+    /// section of the Accessibility Guide].
+    ///
+    /// ```example
+    /// #math.equation(
+    ///   alt: "integral from 1 to infinity of a x squared plus b with respect to x",
+    ///   block: true,
+    ///   $ integral_1^oo a x^2 + b dif x $,
+    /// )
+    /// ```
+    pub alt: Option<EcoString>,
+
     /// The contents of the equation.
     #[required]
     pub body: Content,
@@ -114,7 +128,7 @@ pub struct EquationElem {
     /// The style variant to select.
     #[internal]
     #[ghost]
-    pub variant: MathVariant,
+    pub variant: Option<MathVariant>,
 
     /// Affects the height of exponents.
     #[internal]
@@ -131,12 +145,7 @@ pub struct EquationElem {
     /// Whether to use italic glyphs.
     #[internal]
     #[ghost]
-    pub italic: Smart<bool>,
-
-    /// A forced class to use for all fragment.
-    #[internal]
-    #[ghost]
-    pub class: Option<MathClass>,
+    pub italic: Option<bool>,
 
     /// Values of `scriptPercentScaleDown` and `scriptScriptPercentScaleDown`
     /// respectively in the current font's MathConstants table.
@@ -144,6 +153,11 @@ pub struct EquationElem {
     #[default((70, 50))]
     #[ghost]
     pub script_scale: (i16, i16),
+
+    /// The locale of this element (used for the alternative description).
+    #[internal]
+    #[synthesized]
+    pub locale: Locale,
 }
 
 impl Synthesize for Packed<EquationElem> {
@@ -152,7 +166,7 @@ impl Synthesize for Packed<EquationElem> {
         engine: &mut Engine,
         styles: StyleChain,
     ) -> SourceResult<()> {
-        let supplement = match self.as_ref().supplement(styles) {
+        let supplement = match self.as_ref().supplement.get_ref(styles) {
             Smart::Auto => TextElem::packed(Self::local_name_in(styles)),
             Smart::Custom(None) => Content::empty(),
             Smart::Custom(Some(supplement)) => {
@@ -160,50 +174,38 @@ impl Synthesize for Packed<EquationElem> {
             }
         };
 
-        self.push_supplement(Smart::Custom(Some(Supplement::Content(supplement))));
-        Ok(())
-    }
-}
+        self.supplement
+            .set(Smart::Custom(Some(Supplement::Content(supplement))));
 
-impl Show for Packed<EquationElem> {
-    fn show(&self, engine: &mut Engine, styles: StyleChain) -> SourceResult<Content> {
-        if self.block(styles) {
-            Ok(BlockElem::multi_layouter(
-                self.clone(),
-                engine.routines.layout_equation_block,
-            )
-            .pack()
-            .spanned(self.span()))
-        } else {
-            Ok(InlineElem::layouter(self.clone(), engine.routines.layout_equation_inline)
-                .pack()
-                .spanned(self.span()))
-        }
+        self.locale = Some(Locale::get_in(styles));
+
+        Ok(())
     }
 }
 
 impl ShowSet for Packed<EquationElem> {
     fn show_set(&self, styles: StyleChain) -> Styles {
         let mut out = Styles::new();
-        if self.block(styles) {
-            out.set(AlignElem::set_alignment(Alignment::CENTER));
-            out.set(BlockElem::set_breakable(false));
-            out.set(ParLine::set_numbering(None));
-            out.set(EquationElem::set_size(MathSize::Display));
+        if self.block.get(styles) {
+            out.set(AlignElem::alignment, Alignment::CENTER);
+            out.set(BlockElem::breakable, false);
+            out.set(ParLine::numbering, None);
+            out.set(EquationElem::size, MathSize::Display);
         } else {
-            out.set(EquationElem::set_size(MathSize::Text));
+            out.set(EquationElem::size, MathSize::Text);
         }
-        out.set(TextElem::set_weight(FontWeight::from_number(450)));
-        out.set(TextElem::set_font(FontList(vec![FontFamily::new(
-            "New Computer Modern Math",
-        )])));
+        out.set(TextElem::weight, FontWeight::from_number(450));
+        out.set(
+            TextElem::font,
+            FontList(vec![FontFamily::new("New Computer Modern Math")]),
+        );
         out
     }
 }
 
 impl Count for Packed<EquationElem> {
     fn update(&self) -> Option<CounterUpdate> {
-        (self.block(StyleChain::default()) && self.numbering().is_some())
+        (self.block.get(StyleChain::default()) && self.numbering().is_some())
             .then(|| CounterUpdate::Step(NonZeroUsize::ONE))
     }
 }
@@ -215,24 +217,24 @@ impl LocalName for Packed<EquationElem> {
 impl Refable for Packed<EquationElem> {
     fn supplement(&self) -> Content {
         // After synthesis, this should always be custom content.
-        match (**self).supplement(StyleChain::default()) {
+        match self.supplement.get_cloned(StyleChain::default()) {
             Smart::Custom(Some(Supplement::Content(content))) => content,
             _ => Content::empty(),
         }
     }
 
     fn counter(&self) -> Counter {
-        Counter::of(EquationElem::elem())
+        Counter::of(EquationElem::ELEM)
     }
 
     fn numbering(&self) -> Option<&Numbering> {
-        (**self).numbering(StyleChain::default()).as_ref()
+        self.numbering.get_ref(StyleChain::default()).as_ref()
     }
 }
 
 impl Outlinable for Packed<EquationElem> {
     fn outlined(&self) -> bool {
-        self.block(StyleChain::default()) && self.numbering().is_some()
+        self.block.get(StyleChain::default()) && self.numbering().is_some()
     }
 
     fn prefix(&self, numbers: Content) -> Content {

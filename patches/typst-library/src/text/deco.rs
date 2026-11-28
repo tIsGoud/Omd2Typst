@@ -1,21 +1,18 @@
-use smallvec::smallvec;
-
-use crate::diag::SourceResult;
-use crate::engine::Engine;
-use crate::foundations::{elem, Content, Packed, Show, Smart, StyleChain};
+use crate::foundations::{Content, Smart, elem};
+use crate::introspection::{Locatable, Tagged};
 use crate::layout::{Abs, Corners, Length, Rel, Sides};
-use crate::text::{BottomEdge, BottomEdgeMetric, TextElem, TopEdge, TopEdgeMetric};
+use crate::text::{BottomEdge, BottomEdgeMetric, TopEdge, TopEdgeMetric};
 use crate::visualize::{Color, FixedStroke, Paint, Stroke};
 
 /// Underlines text.
 ///
-/// # Example
+/// = Example <example>
 /// ```example
 /// This is #underline[important].
 /// ```
-#[elem(Show)]
+#[elem(Locatable, Tagged)]
 pub struct UnderlineElem {
-    /// How to [stroke] the line.
+    /// How to @stroke[stroke] the line.
     ///
     /// If set to `{auto}`, takes on the text's color and a thickness defined in
     /// the current font.
@@ -27,7 +24,6 @@ pub struct UnderlineElem {
     ///   [care],
     /// )
     /// ```
-    #[resolve]
     #[fold]
     pub stroke: Smart<Stroke>,
 
@@ -39,7 +35,6 @@ pub struct UnderlineElem {
     ///   The Tale Of A Faraway Line I
     /// ]
     /// ```
-    #[resolve]
     pub offset: Smart<Length>,
 
     /// The amount by which to extend the line beyond (or within if negative)
@@ -50,7 +45,6 @@ pub struct UnderlineElem {
     ///   underline(extent: 2pt)[Chapter 1]
     /// )
     /// ```
-    #[resolve]
     pub extent: Length,
 
     /// Whether the line skips sections in which it would collide with the
@@ -66,9 +60,9 @@ pub struct UnderlineElem {
     /// Whether the line is placed behind the content it underlines.
     ///
     /// ```example
-    /// #set underline(stroke: (thickness: 1em, paint: maroon, cap: "round"))
-    /// #underline(background: true)[This is stylized.] \
-    /// #underline(background: false)[This is partially hidden.]
+    /// #set underline(stroke: aqua + 5pt, evade: false)
+    /// #underline(background: true)[Fully visible.] \
+    /// #underline(background: false)[Partially hidden.]
     /// ```
     #[default(false)]
     pub background: bool,
@@ -78,30 +72,15 @@ pub struct UnderlineElem {
     pub body: Content,
 }
 
-impl Show for Packed<UnderlineElem> {
-    #[typst_macros::time(name = "underline", span = self.span())]
-    fn show(&self, _: &mut Engine, styles: StyleChain) -> SourceResult<Content> {
-        Ok(self.body.clone().styled(TextElem::set_deco(smallvec![Decoration {
-            line: DecoLine::Underline {
-                stroke: self.stroke(styles).unwrap_or_default(),
-                offset: self.offset(styles),
-                evade: self.evade(styles),
-                background: self.background(styles),
-            },
-            extent: self.extent(styles),
-        }])))
-    }
-}
-
 /// Adds a line over text.
 ///
-/// # Example
+/// = Example <example>
 /// ```example
 /// #overline[A line over text.]
 /// ```
-#[elem(Show)]
+#[elem(Locatable, Tagged)]
 pub struct OverlineElem {
-    /// How to [stroke] the line.
+    /// How to @stroke[stroke] the line.
     ///
     /// If set to `{auto}`, takes on the text's color and a thickness defined in
     /// the current font.
@@ -114,7 +93,6 @@ pub struct OverlineElem {
     ///   [The Forest Theme],
     /// )
     /// ```
-    #[resolve]
     #[fold]
     pub stroke: Smart<Stroke>,
 
@@ -126,7 +104,6 @@ pub struct OverlineElem {
     ///   The Tale Of A Faraway Line II
     /// ]
     /// ```
-    #[resolve]
     pub offset: Smart<Length>,
 
     /// The amount by which to extend the line beyond (or within if negative)
@@ -137,7 +114,6 @@ pub struct OverlineElem {
     /// #set underline(extent: 4pt)
     /// #overline(underline[Typography Today])
     /// ```
-    #[resolve]
     pub extent: Length,
 
     /// Whether the line skips sections in which it would collide with the
@@ -158,9 +134,9 @@ pub struct OverlineElem {
     /// Whether the line is placed behind the content it overlines.
     ///
     /// ```example
-    /// #set overline(stroke: (thickness: 1em, paint: maroon, cap: "round"))
-    /// #overline(background: true)[This is stylized.] \
-    /// #overline(background: false)[This is partially hidden.]
+    /// #set overline(stroke: aqua + 5pt)
+    /// #overline(background: true)[Fully visible.] \
+    /// #overline(background: false)[Partially hidden.]
     /// ```
     #[default(false)]
     pub background: bool,
@@ -170,30 +146,15 @@ pub struct OverlineElem {
     pub body: Content,
 }
 
-impl Show for Packed<OverlineElem> {
-    #[typst_macros::time(name = "overline", span = self.span())]
-    fn show(&self, _: &mut Engine, styles: StyleChain) -> SourceResult<Content> {
-        Ok(self.body.clone().styled(TextElem::set_deco(smallvec![Decoration {
-            line: DecoLine::Overline {
-                stroke: self.stroke(styles).unwrap_or_default(),
-                offset: self.offset(styles),
-                evade: self.evade(styles),
-                background: self.background(styles),
-            },
-            extent: self.extent(styles),
-        }])))
-    }
-}
-
 /// Strikes through text.
 ///
-/// # Example
+/// = Example <example>
 /// ```example
 /// This is #strike[not] relevant.
 /// ```
-#[elem(title = "Strikethrough", Show)]
+#[elem(title = "Strikethrough", Locatable, Tagged)]
 pub struct StrikeElem {
-    /// How to [stroke] the line.
+    /// How to @stroke[stroke] the line.
     ///
     /// If set to `{auto}`, takes on the text's color and a thickness defined in
     /// the current font.
@@ -205,7 +166,6 @@ pub struct StrikeElem {
     /// This is #strike(stroke: 1.5pt + red)[very stricken through]. \
     /// This is #strike(stroke: 10pt)[redacted].
     /// ```
-    #[resolve]
     #[fold]
     pub stroke: Smart<Stroke>,
 
@@ -219,7 +179,6 @@ pub struct StrikeElem {
     /// This is #strike(offset: auto)[low-ish]. \
     /// This is #strike(offset: -3.5pt)[on-top].
     /// ```
-    #[resolve]
     pub offset: Smart<Length>,
 
     /// The amount by which to extend the line beyond (or within if negative)
@@ -229,13 +188,12 @@ pub struct StrikeElem {
     /// This #strike(extent: -2pt)[skips] parts of the word.
     /// This #strike(extent: 2pt)[extends] beyond the word.
     /// ```
-    #[resolve]
     pub extent: Length,
 
     /// Whether the line is placed behind the content.
     ///
     /// ```example
-    /// #set strike(stroke: red)
+    /// #set strike(stroke: red + 2pt)
     /// #strike(background: true)[This is behind.] \
     /// #strike(background: false)[This is in front.]
     /// ```
@@ -247,28 +205,13 @@ pub struct StrikeElem {
     pub body: Content,
 }
 
-impl Show for Packed<StrikeElem> {
-    #[typst_macros::time(name = "strike", span = self.span())]
-    fn show(&self, _: &mut Engine, styles: StyleChain) -> SourceResult<Content> {
-        Ok(self.body.clone().styled(TextElem::set_deco(smallvec![Decoration {
-            // Note that we do not support evade option for strikethrough.
-            line: DecoLine::Strikethrough {
-                stroke: self.stroke(styles).unwrap_or_default(),
-                offset: self.offset(styles),
-                background: self.background(styles),
-            },
-            extent: self.extent(styles),
-        }])))
-    }
-}
-
 /// Highlights text with a background color.
 ///
-/// # Example
+/// = Example <example>
 /// ```example
 /// This is #highlight[important].
 /// ```
-#[elem(Show)]
+#[elem(Locatable, Tagged)]
 pub struct HighlightElem {
     /// The color to highlight the text with.
     ///
@@ -281,14 +224,13 @@ pub struct HighlightElem {
     pub fill: Option<Paint>,
 
     /// The highlight's border color. See the
-    /// [rectangle's documentation]($rect.stroke) for more details.
+    /// @rect.stroke[rectangle's documentation] for more details.
     ///
     /// ```example
     /// This is a #highlight(
     ///   stroke: fuchsia
     /// )[stroked highlighting].
     /// ```
-    #[resolve]
     #[fold]
     pub stroke: Sides<Option<Option<Stroke>>>,
 
@@ -316,49 +258,28 @@ pub struct HighlightElem {
     #[default(BottomEdge::Metric(BottomEdgeMetric::Descender))]
     pub bottom_edge: BottomEdge,
 
-    /// The amount by which to extend the background to the sides beyond
-    /// (or within if negative) the content.
+    /// The amount by which to extend the background to the sides beyond (or
+    /// within if negative) the content.
     ///
     /// ```example
     /// A long #highlight(extent: 4pt)[background].
     /// ```
-    #[resolve]
     pub extent: Length,
 
     /// How much to round the highlight's corners. See the
-    /// [rectangle's documentation]($rect.radius) for more details.
+    /// @rect.radius[rectangle's documentation] for more details.
     ///
     /// ```example
     /// Listen #highlight(
     ///   radius: 5pt, extent: 2pt
     /// )[carefully], it will be on the test.
     /// ```
-    #[resolve]
     #[fold]
     pub radius: Corners<Option<Rel<Length>>>,
 
     /// The content that should be highlighted.
     #[required]
     pub body: Content,
-}
-
-impl Show for Packed<HighlightElem> {
-    #[typst_macros::time(name = "highlight", span = self.span())]
-    fn show(&self, _: &mut Engine, styles: StyleChain) -> SourceResult<Content> {
-        Ok(self.body.clone().styled(TextElem::set_deco(smallvec![Decoration {
-            line: DecoLine::Highlight {
-                fill: self.fill(styles),
-                stroke: self
-                    .stroke(styles)
-                    .unwrap_or_default()
-                    .map(|stroke| stroke.map(Stroke::unwrap_or_default)),
-                top_edge: self.top_edge(styles),
-                bottom_edge: self.bottom_edge(styles),
-                radius: self.radius(styles).unwrap_or_default(),
-            },
-            extent: self.extent(styles),
-        }])))
-    }
 }
 
 /// A text decoration.
@@ -373,6 +294,7 @@ pub struct Decoration {
 
 /// A kind of decorative line.
 #[derive(Debug, Clone, Eq, PartialEq, Hash)]
+#[allow(clippy::large_enum_variant)]
 pub enum DecoLine {
     Underline {
         stroke: Stroke<Abs>,

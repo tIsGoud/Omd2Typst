@@ -15,7 +15,6 @@ extern crate self as typst_library;
 pub mod diag;
 pub mod engine;
 pub mod foundations;
-pub mod html;
 pub mod introspection;
 pub mod layout;
 pub mod loading;
@@ -30,12 +29,15 @@ pub mod visualize;
 use std::ops::{Deref, Range};
 
 use serde::{Deserialize, Serialize};
-use typst_syntax::{FileId, Source, Span};
+use typst_syntax::{DiagSpan, DiagSpanKind, FileId, Source};
 use typst_utils::{LazyHash, SmallBitSet};
 
 use crate::diag::FileResult;
-use crate::foundations::{Array, Binding, Bytes, Datetime, Dict, Module, Scope, Styles};
+use crate::foundations::{
+    Array, Binding, Bytes, Datetime, Dict, Duration, Module, NativeRuleMap, Scope, Styles,
+};
 use crate::layout::{Alignment, Dir};
+use crate::routines::Routines;
 use crate::text::{Font, FontBook};
 use crate::visualize::Color;
 
@@ -67,23 +69,32 @@ pub trait World: Send + Sync {
     /// Get the file id of the main source file.
     fn main(&self) -> FileId;
 
-    /// Try to access the specified source file.
+    /// Try to access the specified file location as a source file.
     fn source(&self, id: FileId) -> FileResult<Source>;
 
     /// Try to access the specified file.
+    ///
+    /// For file locations for which [`source`](Self::source) succeeds, this
+    /// should also succeed. The [`Bytes`] can be cheaply created as a view into
+    /// an existing [`Source`] through [`Bytes::from_string`].
     fn file(&self, id: FileId) -> FileResult<Bytes>;
 
     /// Try to access the font with the given index in the font book.
+    ///
+    /// Note that the index is not guaranteed to be in bounds of the font book
+    /// returned by this world's `book()` function. This is the case because
+    /// this function may be invoked with indices from an outdated or different
+    /// font book during incremental compilation validation.
     fn font(&self, index: usize) -> Option<Font>;
 
     /// Get the current date.
     ///
     /// If no offset is specified, the local date should be chosen. Otherwise,
-    /// the UTC date should be chosen with the corresponding offset in hours.
+    /// the UTC date should be chosen with the corresponding offset.
     ///
     /// If this function returns `None`, Typst's `datetime` function will
     /// return an error.
-    fn today(&self, offset: Option<i64>) -> Option<Datetime>;
+    fn today(&self, offset: Option<Duration>) -> Option<Datetime>;
 }
 
 macro_rules! world_impl {
@@ -113,7 +124,7 @@ macro_rules! world_impl {
                 self.deref().font(index)
             }
 
-            fn today(&self, offset: Option<i64>) -> Option<Datetime> {
+            fn today(&self, offset: Option<Duration>) -> Option<Datetime> {
                 self.deref().today(offset)
             }
         }
@@ -129,18 +140,33 @@ pub trait WorldExt {
     /// Get the byte range for a span.
     ///
     /// Returns `None` if the `Span` does not point into any file.
-    fn range(&self, span: Span) -> Option<Range<usize>>;
+    fn range(&self, span: impl Into<DiagSpan>) -> Option<Range<usize>>;
 }
 
 impl<T: World + ?Sized> WorldExt for T {
-    fn range(&self, span: Span) -> Option<Range<usize>> {
-        span.range().or_else(|| self.source(span.id()?).ok()?.range(span))
+    fn range(&self, span: impl Into<DiagSpan>) -> Option<Range<usize>> {
+        match span.into().get() {
+            DiagSpanKind::Detached => None,
+            DiagSpanKind::Number { id, num, sub_range } => {
+                self.source(id).ok()?.range(num, sub_range)
+            }
+            DiagSpanKind::Range { id: _, range } => Some(range),
+        }
     }
 }
 
 /// Definition of Typst's standard library.
+///
+/// To create and configure the standard library, use the `LibraryExt` trait
+/// and call
+/// - `Library::default()` for a standard configuration
+/// - `Library::builder().build()` if you want to customize the library
 #[derive(Debug, Clone, Hash)]
+#[non_exhaustive]
 pub struct Library {
+    /// Defines implementation of various Typst compiler routines as a table of
+    /// function pointers.
+    pub routines: &'static Routines,
     /// The module that contains the definitions that are available everywhere.
     pub global: Module,
     /// The module that contains the definitions available in math mode.
@@ -148,36 +174,35 @@ pub struct Library {
     /// The default style properties (for page size, font selection, and
     /// everything else configurable via set and show rules).
     pub styles: Styles,
-    /// The standard library as a value. Used to provide the `std` variable.
+    /// The built-in show rules.
+    pub rules: NativeRuleMap,
+    /// The standard library as a value. Used to provide the `std` module.
     pub std: Binding,
     /// In-development features that were enabled.
     pub features: Features,
 }
 
-impl Library {
-    /// Create a new builder for a library.
-    pub fn builder() -> LibraryBuilder {
-        LibraryBuilder::default()
-    }
-}
-
-impl Default for Library {
-    /// Constructs the standard library with the default configuration.
-    fn default() -> Self {
-        Self::builder().build()
-    }
-}
-
 /// Configurable builder for the standard library.
 ///
-/// This struct is created by [`Library::builder`].
-#[derive(Debug, Clone, Default)]
+/// Constructed via the `LibraryExt` trait.
+#[derive(Debug, Clone)]
 pub struct LibraryBuilder {
+    routines: &'static Routines,
     inputs: Option<Dict>,
     features: Features,
 }
 
 impl LibraryBuilder {
+    /// Creates a new builder.
+    #[doc(hidden)]
+    pub fn from_routines(routines: &'static Routines) -> Self {
+        Self {
+            routines,
+            inputs: None,
+            features: Features::default(),
+        }
+    }
+
     /// Configure the inputs visible through `sys.inputs`.
     pub fn with_inputs(mut self, inputs: Dict) -> Self {
         self.inputs = Some(inputs);
@@ -196,11 +221,13 @@ impl LibraryBuilder {
     pub fn build(self) -> Library {
         let math = math::module();
         let inputs = self.inputs.unwrap_or_default();
-        let global = global(math.clone(), inputs, &self.features);
+        let global = global(self.routines, math.clone(), inputs, &self.features);
         Library {
+            routines: self.routines,
             global: global.clone(),
             math,
             styles: Styles::new(),
+            rules: (self.routines.rules)(),
             std: Binding::detached(global),
             features: self.features,
         }
@@ -214,6 +241,16 @@ impl LibraryBuilder {
 pub struct Features(SmallBitSet);
 
 impl Features {
+    /// Creates an instance where all features are enabled.
+    pub fn all() -> Self {
+        Feature::all().collect()
+    }
+
+    /// Creates an instance where no features are enabled.
+    pub fn none() -> Self {
+        Self::default()
+    }
+
     /// Check whether the given feature is enabled.
     pub fn is_enabled(&self, feature: Feature) -> bool {
         self.0.contains(feature as usize)
@@ -235,6 +272,15 @@ impl FromIterator<Feature> for Features {
 #[non_exhaustive]
 pub enum Feature {
     Html,
+    Bundle,
+    A11yExtras,
+}
+
+impl Feature {
+    /// Iterates over all available features.
+    pub fn all() -> impl Iterator<Item = Self> {
+        [Self::Html, Self::Bundle, Self::A11yExtras].into_iter()
+    }
 }
 
 /// A group of related standard library definitions.
@@ -254,6 +300,7 @@ pub enum Category {
     Html,
     Svg,
     Png,
+    Bundle,
 }
 
 impl Category {
@@ -273,16 +320,22 @@ impl Category {
             Self::Html => "html",
             Self::Svg => "svg",
             Self::Png => "png",
+            Self::Bundle => "bundle",
         }
     }
 }
 
 /// Construct the module with global definitions.
-fn global(math: Module, inputs: Dict, features: &Features) -> Module {
+fn global(
+    routines: &Routines,
+    math: Module,
+    inputs: Dict,
+    features: &Features,
+) -> Module {
     let mut global = Scope::deduplicating();
 
-    self::foundations::define(&mut global, inputs, features);
-    self::model::define(&mut global);
+    self::foundations::define(&mut global, inputs);
+    self::model::define(&mut global, features);
     self::text::define(&mut global);
     self::layout::define(&mut global);
     self::visualize::define(&mut global);
@@ -291,9 +344,9 @@ fn global(math: Module, inputs: Dict, features: &Features) -> Module {
     self::symbols::define(&mut global);
 
     global.define("math", math);
-    global.define("pdf", self::pdf::module());
+    global.define("pdf", self::pdf::module(features));
     if features.is_enabled(Feature::Html) {
-        global.define("html", self::html::module());
+        global.define("html", (routines.html_module)());
     }
 
     prelude(&mut global);

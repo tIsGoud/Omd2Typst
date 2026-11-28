@@ -1,14 +1,14 @@
 use std::fmt::{self, Debug, Formatter};
 use std::ops::Add;
 
-use typst_utils::Get;
+use typst_utils::{Get, Numeric};
 
-use crate::diag::{bail, HintedStrResult};
+use crate::diag::{HintedStrResult, bail};
 use crate::foundations::{
-    cast, AlternativeFold, CastInfo, Dict, Fold, FromValue, IntoValue, Reflect, Resolve,
-    StyleChain, Value,
+    AlternativeFold, CastInfo, Dict, Fold, FromValue, IntoValue, Reflect, Resolve,
+    StyleChain, Value, cast,
 };
-use crate::layout::{Abs, Alignment, Axes, Axis, Corner, Rel, Size};
+use crate::layout::{Abs, Alignment, Axes, Axis, Corner, Corners, Rel, Size};
 
 /// A container with left, top, right and bottom components.
 #[derive(Default, Copy, Clone, Eq, PartialEq, Hash)]
@@ -80,6 +80,20 @@ impl<T> Sides<T> {
         [&self.left, &self.top, &self.right, &self.bottom].into_iter()
     }
 
+    /// Map two adjacent sides into a corner `f`.
+    pub fn map_corners<F, U>(self, mut f: F) -> Corners<U>
+    where
+        F: FnMut(T, T) -> U,
+        T: Copy,
+    {
+        Corners {
+            top_left: f(self.left, self.top),
+            top_right: f(self.top, self.right),
+            bottom_right: f(self.right, self.bottom),
+            bottom_left: f(self.bottom, self.left),
+        }
+    }
+
     /// Whether all sides are equal.
     pub fn is_uniform(&self) -> bool
     where
@@ -97,6 +111,14 @@ impl<T: Add> Sides<T> {
 }
 
 impl<T> Sides<Option<T>> {
+    /// Unwrap-or the individual sides.
+    pub fn unwrap_or(self, default: T) -> Sides<T>
+    where
+        T: Clone,
+    {
+        self.map(|v| v.unwrap_or(default.clone()))
+    }
+
     /// Unwrap-or-default the individual sides.
     pub fn unwrap_or_default(self) -> Sides<T>
     where
@@ -116,7 +138,9 @@ impl Sides<Rel<Abs>> {
             bottom: self.bottom.relative_to(size.y),
         }
     }
+}
 
+impl<T: Numeric> Sides<T> {
     /// Whether all sides are zero.
     pub fn is_zero(&self) -> bool {
         self.left.is_zero()
@@ -184,10 +208,10 @@ where
     T: PartialEq + IntoValue,
 {
     fn into_value(self) -> Value {
-        if self.is_uniform() {
-            if let Some(left) = self.left {
-                return left.into_value();
-            }
+        if self.is_uniform()
+            && let Some(left) = self.left
+        {
+            return left.into_value();
         }
 
         let mut dict = Dict::new();

@@ -1,13 +1,13 @@
 use ecow::EcoString;
 
-use crate::foundations::{ty, Repr};
+use crate::foundations::{Repr, ty};
 
 /// A type with two states.
 ///
 /// The boolean type has two values: `{true}` and `{false}`. It denotes whether
 /// something is active or enabled.
 ///
-/// # Example
+/// = Example <example>
 /// ```example
 /// #false \
 /// #true \

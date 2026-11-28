@@ -4,19 +4,18 @@ use std::fmt::{self, Debug, Formatter};
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 
-use ecow::{eco_format, EcoString};
+use ecow::{EcoString, eco_format};
 use serde::de::value::{MapAccessDeserializer, SeqAccessDeserializer};
 use serde::de::{Error, MapAccess, SeqAccess, Visitor};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
-use typst_syntax::{ast, Span};
-use typst_utils::ArcExt;
+use typst_syntax::{Span, ast};
 
-use crate::diag::{DeprecationSink, HintedStrResult, HintedString, StrResult};
+use crate::diag::{HintedStrResult, HintedString, StrResult, WarningSink};
 use crate::foundations::{
-    fields, ops, repr, Args, Array, AutoValue, Bytes, CastInfo, Content, Datetime,
-    Decimal, Dict, Duration, Fold, FromValue, Func, IntoValue, Label, Module,
-    NativeElement, NativeType, NoneValue, Reflect, Repr, Resolve, Scope, Str, Styles,
-    Symbol, SymbolElem, Type, Version,
+    Args, Array, AutoValue, Bytes, CastInfo, Content, Datetime, Decimal, Dict, Duration,
+    Fold, FromValue, Func, IntoValue, Label, Module, NativeElement, NativeType,
+    NoneValue, Reflect, Repr, Resolve, Scope, Str, Styles, Symbol, SymbolElem, Type,
+    Version, fields, ops, repr,
 };
 use crate::layout::{Abs, Angle, Em, Fr, Length, Ratio, Rel};
 use crate::text::{RawContent, RawElem, TextElem};
@@ -155,11 +154,14 @@ impl Value {
     }
 
     /// Try to access a field on the value.
-    pub fn field(&self, field: &str, sink: impl DeprecationSink) -> StrResult<Value> {
+    pub fn field(&self, field: &str, sink: impl WarningSink) -> StrResult<Value> {
         match self {
-            Self::Symbol(symbol) => symbol.clone().modified(field).map(Self::Symbol),
+            Self::Symbol(symbol) => {
+                symbol.clone().modified(sink, field).map(Self::Symbol)
+            }
             Self::Version(version) => version.component(field).map(Self::Int),
             Self::Dict(dict) => dict.get(field).cloned(),
+            Self::Args(args) => args.field(field).cloned(),
             Self::Content(content) => content.field_by_name(field),
             Self::Type(ty) => ty.field(field, sink).cloned(),
             Self::Func(func) => func.field(field, sink).cloned(),
@@ -292,8 +294,7 @@ impl Repr for Value {
 
 impl PartialEq for Value {
     fn eq(&self, other: &Self) -> bool {
-        // No way to emit deprecation warnings here :(
-        ops::equal(self, other, &mut ())
+        ops::equal(self, other)
     }
 }
 
@@ -380,7 +381,7 @@ impl<'de> Visitor<'de> for ValueVisitor {
     type Value = Value;
 
     fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
-        formatter.write_str("a typst value")
+        formatter.write_str("a Typst value")
     }
 
     fn visit_bool<E: Error>(self, v: bool) -> Result<Self::Value, E> {
@@ -403,6 +404,10 @@ impl<'de> Visitor<'de> for ValueVisitor {
         Ok(v.into_value())
     }
 
+    fn visit_i128<E: Error>(self, v: i128) -> Result<Self::Value, E> {
+        Ok(v.into_value())
+    }
+
     fn visit_u8<E: Error>(self, v: u8) -> Result<Self::Value, E> {
         Ok(v.into_value())
     }
@@ -416,6 +421,10 @@ impl<'de> Visitor<'de> for ValueVisitor {
     }
 
     fn visit_u64<E: Error>(self, v: u64) -> Result<Self::Value, E> {
+        Ok(v.into_value())
+    }
+
+    fn visit_u128<E: Error>(self, v: u128) -> Result<Self::Value, E> {
         Ok(v.into_value())
     }
 
@@ -485,7 +494,6 @@ impl<'de> Visitor<'de> for ValueVisitor {
 
 /// A value that is not part of the built-in enum.
 #[derive(Clone, Hash)]
-#[allow(clippy::derived_hash_with_manual_eq)]
 pub struct Dynamic(Arc<dyn Bounds>);
 
 impl Dynamic {
@@ -499,12 +507,14 @@ impl Dynamic {
 
     /// Whether the wrapped type is `T`.
     pub fn is<T: 'static>(&self) -> bool {
-        (*self.0).as_any().is::<T>()
+        let inner: &dyn Bounds = &*self.0;
+        (inner as &dyn Any).is::<T>()
     }
 
     /// Try to downcast to a reference to a specific type.
     pub fn downcast<T: 'static>(&self) -> Option<&T> {
-        (*self.0).as_any().downcast_ref()
+        let inner: &dyn Bounds = &*self.0;
+        (inner as &dyn Any).downcast_ref()
     }
 
     /// The name of the stored value's type.
@@ -531,8 +541,7 @@ impl PartialEq for Dynamic {
     }
 }
 
-trait Bounds: Debug + Repr + Sync + Send + 'static {
-    fn as_any(&self) -> &dyn Any;
+trait Bounds: Debug + Repr + Any + Sync + Send + 'static {
     fn dyn_eq(&self, other: &Dynamic) -> bool;
     fn dyn_ty(&self) -> Type;
     fn dyn_hash(&self, state: &mut dyn Hasher);
@@ -542,10 +551,6 @@ impl<T> Bounds for T
 where
     T: Debug + Repr + NativeType + PartialEq + Hash + Sync + Send + 'static,
 {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn dyn_eq(&self, other: &Dynamic) -> bool {
         let Some(other) = other.downcast::<Self>() else { return false };
         self == other
@@ -677,7 +682,7 @@ impl<T: Reflect> Reflect for Arc<T> {
 
 impl<T: Clone + IntoValue> IntoValue for Arc<T> {
     fn into_value(self) -> Value {
-        Arc::take(self).into_value()
+        Arc::unwrap_or_clone(self).into_value()
     }
 }
 
@@ -694,13 +699,13 @@ impl<T: Clone + Resolve> Resolve for Arc<T> {
     type Output = Arc<T::Output>;
 
     fn resolve(self, styles: super::StyleChain) -> Self::Output {
-        Arc::new(Arc::take(self).resolve(styles))
+        Arc::new(Arc::unwrap_or_clone(self).resolve(styles))
     }
 }
 
 impl<T: Clone + Fold> Fold for Arc<T> {
     fn fold(self, outer: Self) -> Self {
-        Arc::new(Arc::take(self).fold(Arc::take(outer)))
+        Arc::new(Arc::unwrap_or_clone(self).fold(Arc::unwrap_or_clone(outer)))
     }
 }
 

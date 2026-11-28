@@ -6,14 +6,15 @@ use std::ops::{Add, AddAssign, Deref, Range};
 use comemo::Tracked;
 use ecow::EcoString;
 use serde::{Deserialize, Serialize};
-use typst_syntax::{Span, Spanned};
+use typst_syntax::Spanned;
+use unicode_normalization::UnicodeNormalization;
 use unicode_segmentation::UnicodeSegmentation;
 
-use crate::diag::{bail, At, SourceResult, StrResult};
+use crate::diag::{At, SourceResult, StrResult, bail};
 use crate::engine::Engine;
 use crate::foundations::{
-    cast, dict, func, repr, scope, ty, Array, Bytes, Context, Decimal, Dict, Func,
-    IntoValue, Label, Repr, Type, Value, Version,
+    Array, Bytes, Cast, Context, Decimal, Dict, Func, IntoValue, Label, Repr, Type,
+    Value, Version, cast, dict, func, repr, scope, ty,
 };
 use crate::layout::Alignment;
 
@@ -34,33 +35,35 @@ pub use crate::__format_str as format_str;
 
 /// A sequence of Unicode codepoints.
 ///
-/// You can iterate over the grapheme clusters of the string using a [for
-/// loop]($scripting/#loops). Grapheme clusters are basically characters but
-/// keep together things that belong together, e.g. multiple codepoints that
-/// together form a flag emoji. Strings can be added with the `+` operator,
-/// [joined together]($scripting/#blocks) and multiplied with integers.
+/// You can iterate over the grapheme clusters of the string using a
+/// @reference:scripting:loops[for loop]. Grapheme clusters are basically
+/// characters but keep together things that belong together, e.g. multiple
+/// codepoints that together form a flag emoji. Strings can be added with the
+/// `+` operator, @reference:scripting:blocks[joined together] and multiplied
+/// with integers.
 ///
 /// Typst provides utility methods for string manipulation. Many of these
-/// methods (e.g., `split`, `trim` and `replace`) operate on _patterns:_ A
-/// pattern can be either a string or a [regular expression]($regex). This makes
-/// the methods quite versatile.
+/// methods (e.g., @str.split[`split`], @str.trim[`trim`] and
+/// @str.replace[`replace`]) operate on _patterns:_ A pattern can be either a
+/// string or a @regex[regular expression]. This makes the methods quite
+/// versatile.
 ///
 /// All lengths and indices are expressed in terms of UTF-8 bytes. Indices are
 /// zero-based and negative indices wrap around to the end of the string.
 ///
-/// You can convert a value to a string with this type's constructor.
+/// You can convert a value to a string with the `str` constructor.
 ///
-/// # Example
+/// = Example <example>
 /// ```example
 /// #"hello world!" \
 /// #"\"hello\n  world\"!" \
 /// #"1 2 3".split() \
 /// #"1,2;3".split(regex("[,;]")) \
-/// #(regex("\d+") in "ten euros") \
-/// #(regex("\d+") in "10 euros")
+/// #(regex("\\d+") in "ten euros") \
+/// #(regex("\\d+") in "10 euros")
 /// ```
 ///
-/// # Escape sequences { #escapes }
+/// = #short-or-long[Escapes][Escape sequences] <escapes>
 /// Just like in markup, you can escape a few symbols in strings:
 /// - `[\\]` for a backslash
 /// - `[\"]` for a quote
@@ -136,7 +139,7 @@ impl Str {
     /// - Bytes are decoded as UTF-8.
     ///
     /// If you wish to convert from and to Unicode code points, see the
-    /// [`to-unicode`]($str.to-unicode) and [`from-unicode`]($str.from-unicode)
+    /// @str.to-unicode[`to-unicode`] and @str.from-unicode[`from-unicode`]
     /// functions.
     ///
     /// ```example
@@ -152,21 +155,28 @@ impl Str {
         value: ToStr,
         /// The base (radix) to display integers in, between 2 and 36.
         #[named]
-        #[default(Spanned::new(10, Span::detached()))]
-        base: Spanned<i64>,
+        #[default(Spanned::detached(Base::Default))]
+        base: Spanned<Base>,
     ) -> SourceResult<Str> {
         Ok(match value {
             ToStr::Str(s) => {
-                if base.v != 10 {
+                if matches!(base.v, Base::User(_)) {
                     bail!(base.span, "base is only supported for integers");
                 }
                 s
             }
             ToStr::Int(n) => {
-                if base.v < 2 || base.v > 36 {
+                let b = base.v.value();
+                if b == 1 && n > 0 {
+                    bail!(
+                        base.span, "base must be between 2 and 36";
+                        hint: "generate a unary representation with `\"1\" * {n}`";
+                    );
+                }
+                if b < 2 || b > 36 {
                     bail!(base.span, "base must be between 2 and 36");
                 }
-                repr::format_int_with_base(n, base.v).into()
+                repr::format_int_with_base(n, b).into()
             }
         })
     }
@@ -178,24 +188,40 @@ impl Str {
     }
 
     /// Extracts the first grapheme cluster of the string.
-    /// Fails with an error if the string is empty.
+    ///
+    /// Returns the provided default value if the string is empty or fails with
+    /// an error if no default value was specified.
     #[func]
-    pub fn first(&self) -> StrResult<Str> {
+    pub fn first(
+        &self,
+        /// A default value to return if the string is empty.
+        #[named]
+        default: Option<Str>,
+    ) -> StrResult<Str> {
         self.0
             .graphemes(true)
             .next()
             .map(Into::into)
+            .or(default)
             .ok_or_else(string_is_empty)
     }
 
     /// Extracts the last grapheme cluster of the string.
-    /// Fails with an error if the string is empty.
+    ///
+    /// Returns the provided default value if the string is empty or fails with
+    /// an error if no default value was specified.
     #[func]
-    pub fn last(&self) -> StrResult<Str> {
+    pub fn last(
+        &self,
+        /// A default value to return if the string is empty.
+        #[named]
+        default: Option<Str>,
+    ) -> StrResult<Str> {
         self.0
             .graphemes(true)
             .next_back()
             .map(Into::into)
+            .or(default)
             .ok_or_else(string_is_empty)
     }
 
@@ -218,8 +244,8 @@ impl Str {
             .ok_or_else(|| no_default_and_out_of_bounds(index, len))
     }
 
-    /// Extracts a substring of the string.
-    /// Fails with an error if the start or end index is out of bounds.
+    /// Extracts a substring of the string. Fails with an error if the start or
+    /// end index is out of bounds.
     #[func]
     pub fn slice(
         &self,
@@ -232,13 +258,17 @@ impl Str {
         #[default]
         end: Option<i64>,
         /// The number of bytes to extract. This is equivalent to passing
-        /// `start + count` as the `end` position. Mutually exclusive with `end`.
+        /// `start + count` as the `end` position. Mutually exclusive with
+        /// `end`.
         #[named]
         count: Option<i64>,
     ) -> StrResult<Str> {
-        let end = end.or(count.map(|c| start + c)).unwrap_or(self.len() as i64);
+        if end.is_some() && count.is_some() {
+            bail!("`end` and `count` are mutually exclusive");
+        }
         let start = self.locate(start)?;
-        let end = self.locate(end)?.max(start);
+        let end = end.or(count.map(|c| start as i64 + c));
+        let end = self.locate(end.unwrap_or(self.len() as i64))?.max(start);
         Ok(self.0[start..end].into())
     }
 
@@ -284,6 +314,30 @@ impl Str {
             .try_into()
             .map_err(|_| eco_format!("{value:#x} is not a valid codepoint"))?;
         Ok(c.into())
+    }
+
+    /// Normalizes the string to the given Unicode normal form.
+    ///
+    /// This is useful when manipulating strings containing Unicode combining
+    /// characters.
+    ///
+    /// ```typ
+    /// #assert.eq("é".normalize(form: "nfd"), "e\u{0301}")
+    /// #assert.eq("ſ́".normalize(form: "nfkc"), "ś")
+    /// ```
+    #[func]
+    pub fn normalize(
+        &self,
+        #[named]
+        #[default(UnicodeNormalForm::Nfc)]
+        form: UnicodeNormalForm,
+    ) -> Str {
+        match form {
+            UnicodeNormalForm::Nfc => self.nfc().collect(),
+            UnicodeNormalForm::Nfd => self.nfd().collect(),
+            UnicodeNormalForm::Nfkc => self.nfkc().collect(),
+            UnicodeNormalForm::Nfkd => self.nfkd().collect(),
+        }
     }
 
     /// Whether the string contains the specified pattern.
@@ -381,6 +435,23 @@ impl Str {
     ///   group. The first item of the array contains the first matched
     ///   capturing, not the whole match! This is empty unless the `pattern` was
     ///   a regex with capturing groups.
+    ///
+    /// #example(
+    ///   title: "Shape of the returned dictionary",
+    ///   ```
+    ///   #let pat = regex("not (a|an) (apple|cat)")
+    ///   #"I'm a doctor, not an apple.".match(pat) \
+    ///   #"I am not a cat!".match(pat)
+    ///   ```
+    /// )
+    ///
+    /// #example(
+    ///   title: "Different kinds of patterns",
+    ///   ```
+    ///   #assert.eq("Is there a".match("for this?"), none)
+    ///   #"The time of my life.".match(regex("[mit]+e"))
+    ///   ```
+    /// )
     #[func]
     pub fn match_(
         &self,
@@ -397,7 +468,11 @@ impl Str {
 
     /// Searches for the specified pattern in the string and returns an array of
     /// dictionaries with details about all matches. For details about the
-    /// returned dictionaries, see above.
+    /// returned dictionaries, see @str.match[above].
+    ///
+    /// ```example
+    /// #"Day by Day.".matches("Day")
+    /// ```
     #[func]
     pub fn matches(
         &self,
@@ -432,8 +507,12 @@ impl Str {
         /// The string to replace the matches with or a function that gets a
         /// dictionary for each match and can return individual replacement
         /// strings.
+        ///
+        /// The dictionary passed to the function has the same shape as the
+        /// dictionary returned by @str.match[`match`].
         replacement: Replacement,
-        ///  If given, only the first `count` matches of the pattern are placed.
+        /// If given, only the first `count` matches of the pattern are
+        /// replaced.
         #[named]
         count: Option<usize>,
     ) -> SourceResult<Str> {
@@ -486,8 +565,8 @@ impl Str {
         Ok(output.into())
     }
 
-    /// Removes matches of a pattern from one or both sides of the string, once or
-    /// repeatedly and returns the resulting string.
+    /// Removes matches of a pattern from one or both sides of the string, once
+    /// or repeatedly and returns the resulting string.
     #[func]
     pub fn trim(
         &self,
@@ -577,8 +656,8 @@ impl Str {
     /// When the empty string is used as a separator, it separates every
     /// character (i.e., Unicode code point) in the string, along with the
     /// beginning and end of the string. In practice, this means that the
-    /// resulting list of parts will contain the empty string at the start
-    /// and end of the list.
+    /// resulting list of parts will contain the empty string at the start and
+    /// end of the list.
     #[func]
     pub fn split(
         &self,
@@ -598,7 +677,14 @@ impl Str {
         }
     }
 
-    /// Reverse the string.
+    /// Reverses the string.
+    ///
+    /// More specifically, this returns a string with the same grapheme
+    /// clusters, in reversed order.
+    ///
+    /// ```example
+    /// #"Pirate flag: 🏴‍☠️".rev()
+    /// ```
     #[func(title = "Reverse")]
     pub fn rev(&self) -> Str {
         let mut s = EcoString::with_capacity(self.0.len());
@@ -631,13 +717,13 @@ impl Display for Str {
 
 impl Repr for Str {
     fn repr(&self) -> EcoString {
-        self.as_ref().repr()
+        self.as_str().repr()
     }
 }
 
 impl Repr for EcoString {
     fn repr(&self) -> EcoString {
-        self.as_ref().repr()
+        self.as_str().repr()
     }
 }
 
@@ -782,10 +868,52 @@ cast! {
     v: f64 => Self::Str(repr::display_float(v).into()),
     v: Decimal => Self::Str(format_str!("{}", v)),
     v: Version => Self::Str(format_str!("{}", v)),
-    v: Bytes => Self::Str(v.to_str().map_err(|_| "bytes are not valid utf-8")?),
+    v: Bytes => Self::Str(v.to_str().map_err(|_| "bytes are not valid UTF-8")?),
     v: Label => Self::Str(v.resolve().as_str().into()),
     v: Type => Self::Str(v.long_name().into()),
     v: Str => Self::Str(v),
+}
+
+/// Similar to `Option<i64>`, but the default value casts to `10` rather than
+/// `none`, so that the right default value is documented.
+#[derive(Debug, Copy, Clone)]
+pub enum Base {
+    Default,
+    User(i64),
+}
+
+impl Base {
+    pub fn value(self) -> i64 {
+        match self {
+            Self::Default => 10,
+            Self::User(b) => b,
+        }
+    }
+}
+
+cast! {
+    Base,
+    self => self.value().into_value(),
+    v: i64 => Self::User(v),
+}
+
+/// A Unicode normalization form.
+#[derive(Debug, Copy, Clone, Eq, PartialEq, Hash, Cast)]
+pub enum UnicodeNormalForm {
+    /// Canonical composition where e.g. accented letters are turned into a
+    /// single Unicode codepoint.
+    #[string("nfc")]
+    Nfc,
+    /// Canonical decomposition where e.g. accented letters are split into a
+    /// separate base and diacritic.
+    #[string("nfd")]
+    Nfd,
+    /// Like NFC, but using the Unicode compatibility decompositions.
+    #[string("nfkc")]
+    Nfkc,
+    /// Like NFD, but using the Unicode compatibility decompositions.
+    #[string("nfkd")]
+    Nfkd,
 }
 
 /// Convert an item of std's `match_indices` to a dictionary.
@@ -815,19 +943,22 @@ fn captures_to_dict(cap: regex::Captures) -> Dict {
 /// The out of bounds access error message.
 #[cold]
 fn out_of_bounds(index: i64, len: usize) -> EcoString {
-    eco_format!("string index out of bounds (index: {}, len: {})", index, len)
+    eco_format!("string index out of bounds (index: {index}, len: {len})")
 }
 
 /// The out of bounds access error message when no default value was given.
 #[cold]
 fn no_default_and_out_of_bounds(index: i64, len: usize) -> EcoString {
-    eco_format!("no default value was specified and string index out of bounds (index: {}, len: {})", index, len)
+    eco_format!(
+        "no default value was specified and string index out of bounds \
+         (index: {index}, len: {len})"
+    )
 }
 
 /// The char boundary access error message.
 #[cold]
 fn not_a_char_boundary(index: i64) -> EcoString {
-    eco_format!("string index {} is not a character boundary", index)
+    eco_format!("string index {index} is not a character boundary")
 }
 
 /// The error message when the string is empty.
@@ -838,19 +969,19 @@ fn string_is_empty() -> EcoString {
 
 /// A regular expression.
 ///
-/// Can be used as a [show rule selector]($styling/#show-rules) and with
-/// [string methods]($str) like `find`, `split`, and `replace`.
+/// Can be used as a @reference:styling:show-rules[show rule selector] and with
+/// @str[string methods] like `find`, `split`, `replace`, and `match`.
 ///
-/// [See here](https://docs.rs/regex/latest/regex/#syntax) for a specification
-/// of the supported syntax.
+/// #link("https://docs.rs/regex/latest/regex/#syntax")[See here] for a
+/// specification of the supported syntax.
 ///
-/// # Example
+/// = Example <example>
 /// ```example
 /// // Works with string methods.
 /// #"a,b;c".split(regex("[,;]"))
 ///
 /// // Works with show rules.
-/// #show regex("\d+"): set text(red)
+/// #show regex("\\d+"): set text(red)
 ///
 /// The numbers 1 to 10.
 /// ```
@@ -872,14 +1003,18 @@ impl Regex {
     pub fn construct(
         /// The regular expression as a string.
         ///
-        /// Most regex escape sequences just work because they are not valid Typst
-        /// escape sequences. To produce regex escape sequences that are also valid in
-        /// Typst (e.g. `[\\]`), you need to escape twice. Thus, to match a verbatim
-        /// backslash, you would need to write `{regex("\\\\")}`.
+        /// Both Typst strings and regular expressions use backslashes for
+        /// escaping. To produce a regex escape sequence that is also valid in
+        /// Typst, you need to escape the backslash itself (e.g., writing
+        /// `{regex("\\\\")}` for the regex `\\`). Regex escape sequences that
+        /// are not valid Typst escape sequences (e.g., `\d` and `\b`) can be
+        /// entered into strings directly, but it's good practice to still
+        /// escape them to avoid ambiguity (i.e., `{regex("\\b\\d")}`). See the
+        /// @str:escapes[list of valid string escape sequences].
         ///
         /// If you need many escape sequences, you can also create a raw element
         /// and extract its text to use it for your regular expressions:
-        /// ```{regex(`\d+\.\d+\.\d+`.text)}```.
+        /// ``` {regex(`\d+\.\d+\.\d+`.text)}```.
         regex: Spanned<Str>,
     ) -> SourceResult<Regex> {
         Self::new(&regex.v).at(regex.span)

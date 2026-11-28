@@ -1,10 +1,10 @@
 use std::path::{Path, PathBuf};
 
 use typst::foundations::Bytes;
-use typst::syntax::{FileId, Source, VirtualPath};
+use typst::syntax::{FileId, RootedPath, Source, VirtualPath, VirtualRoot};
 use typst::text::{Font, FontBook, FontFamily, FontList, TextElem};
 use typst::utils::LazyHash;
-use typst::{Library, World};
+use typst::{Library, LibraryExt, World};
 
 pub struct OmdWorld {
     library: LazyHash<Library>,
@@ -61,7 +61,10 @@ impl OmdWorld {
             scan_font_dir(&dir, &mut book, &mut fonts);
         }
 
-        let main_id = FileId::new(None, VirtualPath::new("main.typ"));
+        let main_id = FileId::new(RootedPath::new(
+            VirtualRoot::Project,
+            VirtualPath::new("main.typ").expect("valid path"),
+        ));
         let main_source = Source::new(main_id, typ_source);
 
         // Override the Typst default font ("Libertinus Serif") so that any
@@ -69,10 +72,13 @@ impl OmdWorld {
         // unavailable, falls back to Liberation Sans (sans) rather than to a
         // serif face. Libertinus Serif stays in the list so math still works.
         let mut library = Library::builder().build();
-        library.styles.set(TextElem::set_font(FontList(vec![
-            FontFamily::new("Liberation Sans"),
-            FontFamily::new("Libertinus Serif"),
-        ])));
+        library.styles.set(
+            TextElem::font,
+            FontList(vec![
+                FontFamily::new("Liberation Sans"),
+                FontFamily::new("Libertinus Serif"),
+            ]),
+        );
 
         Self {
             library: LazyHash::new(library),
@@ -102,14 +108,14 @@ impl World for OmdWorld {
         if id == self.main_id {
             return Ok(self.main_source.clone());
         }
-        let path = self.root.join(id.vpath().as_rootless_path());
+        let path = self.root.join(id.vpath().get_without_slash());
         let text = std::fs::read_to_string(&path)
             .map_err(|e| typst::diag::FileError::from_io(e, &path))?;
         Ok(Source::new(id, text))
     }
 
     fn file(&self, id: FileId) -> typst::diag::FileResult<Bytes> {
-        let path = self.root.join(id.vpath().as_rootless_path());
+        let path = self.root.join(id.vpath().get_without_slash());
         let data = std::fs::read(&path)
             .map_err(|e| typst::diag::FileError::from_io(e, &path))?;
         Ok(Bytes::new(data))
@@ -120,7 +126,7 @@ impl World for OmdWorld {
         Font::new(slot.data.clone(), slot.index)
     }
 
-    fn today(&self, _offset: Option<i64>) -> Option<typst::foundations::Datetime> {
+    fn today(&self, _offset: Option<typst::foundations::Duration>) -> Option<typst::foundations::Datetime> {
         // Returning None causes Typst to leave date fields blank.
         None
     }
@@ -204,7 +210,7 @@ mod tests {
             std::env::current_dir().unwrap(),
             "#set page(width: 100pt, height: 100pt)\nHello".to_string(),
         );
-        let result = typst::compile::<typst::layout::PagedDocument>(&world);
+        let result = typst::compile::<typst_layout::PagedDocument>(&world);
         assert!(
             result.output.is_ok(),
             "Typst compilation failed: {:?}",
@@ -254,7 +260,7 @@ mod tests {
         let typst_src = render_typst(&doc, None, &RenderOptions::default());
 
         let world = OmdWorld::new(std::env::current_dir().unwrap(), typst_src);
-        let result = typst::compile::<typst::layout::PagedDocument>(&world);
+        let result = typst::compile::<typst_layout::PagedDocument>(&world);
         assert!(
             result.output.is_ok(),
             "Typst compilation failed: {:?}",

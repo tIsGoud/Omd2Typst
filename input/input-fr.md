@@ -270,7 +270,7 @@ Avec le réglage *Use file name as caption* (CLI : `--filename-captions`), une i
 
 ## PDF intégrés
 
-Un PDF peut être intégré comme une image : `![[fichier.pdf]]`. L'export inclut ses pages, de sorte qu'une annexe conserve la numérotation des pages et les titres de chapitre du document. Dans le plugin Obsidian, le réglage *PDF embeds* choisit l'affichage des pages : dans les marges de la page, avec l'en-tête et le pied de page (par défaut), ou en pages entières. Cela demande Typst 0.14 ou plus récent. L'outil en ligne de commande n'inclut pas encore les PDF et affiche un espace réservé.
+Un PDF peut être intégré comme une image : `![[fichier.pdf]]`. L'export inclut ses pages, de sorte qu'une annexe conserve la numérotation des pages et les titres de chapitre du document. Dans le plugin Obsidian, le réglage *PDF embeds* choisit l'affichage des pages : dans les marges de la page, avec l'en-tête et le pied de page (par défaut), ou en pages entières. Cela demande Typst 0.14 ou plus récent. L'outil en ligne de commande inclut aussi les PDF par défaut ; avec `--pdf-embeds off` il affiche un espace réservé.
 
 | Syntaxe | Pages incluses |
 | --- | --- |

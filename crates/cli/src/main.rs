@@ -1,8 +1,9 @@
+mod pdf;
 mod world;
 
 use omd2typst_core::{
     appendix_unmatched, collect_unsupported_embeds, numbering_unmatched, parse_markdown, reading_guide_unmatched,
-    render_typst, take_math_failures, MathMode, RenderOptions, WikilinkMode,
+    render_typst, take_math_failures, MathMode, PdfEmbedMode, RenderOptions, WikilinkMode,
     BUILTIN_TEMPLATE,
 };
 
@@ -69,6 +70,14 @@ struct Cli {
     #[arg(long)]
     filename_captions: bool,
 
+    /// How PDF embeds (`![[annex.pdf]]`, `![[annex.pdf#page=3]]`) are included:
+    /// `fit` (one page per PDF page inside the document's margins, with header
+    /// and footer), `full` (full pages without margins, header and footer),
+    /// `skip` (left out silently) or `off` (a placeholder note). Needs the PDF
+    /// file to be readable from the current directory, like images.
+    #[arg(long, value_enum, default_value_t = PdfEmbeds::Fit)]
+    pdf_embeds: PdfEmbeds,
+
     /// Write the built-in styling to FILE as a Typst template and exit.
     /// Edit the file, then pass it back with --template.
     #[arg(long, value_name = "FILE")]
@@ -86,6 +95,25 @@ impl From<Math> for MathMode {
         match m {
             Math::Latex => MathMode::Latex,
             Math::Typst => MathMode::Typst,
+        }
+    }
+}
+
+#[derive(ValueEnum, Clone, Copy)]
+enum PdfEmbeds {
+    Off,
+    Skip,
+    Fit,
+    Full,
+}
+
+impl From<PdfEmbeds> for PdfEmbedMode {
+    fn from(p: PdfEmbeds) -> Self {
+        match p {
+            PdfEmbeds::Off => PdfEmbedMode::Off,
+            PdfEmbeds::Skip => PdfEmbedMode::Skip,
+            PdfEmbeds::Fit => PdfEmbedMode::Fit,
+            PdfEmbeds::Full => PdfEmbedMode::Full,
         }
     }
 }
@@ -164,16 +192,33 @@ fn main() -> Result<()> {
 
     let doc = parse_markdown(&input);
 
-    // Warn about embeds that cannot be rendered (PDFs, note transclusions,
-    // audio/video, Obsidian Bases — the latter only by the Obsidian plugin);
-    // the document shows an inline placeholder for each.
-    for src in collect_unsupported_embeds(&doc) {
-        eprintln!(
-            "warning: embed '{}' is not supported; \
-             inserted a placeholder note instead \
-             (Obsidian Bases embeds are only rendered by the Omd2Typst Obsidian plugin).",
-            src
-        );
+    // PDF embeds: Typst cannot count the pages of a PDF, so read the counts here.
+    let pdf_mode: PdfEmbedMode = cli.pdf_embeds.into();
+    let root = std::env::current_dir().context("Cannot determine current directory")?;
+    let embeds = collect_unsupported_embeds(&doc);
+    let pdf_pages = pdf::page_counts(&embeds, pdf_mode, &root, |w| eprintln!("warning: {w}"));
+
+    // Warn about embeds that cannot be rendered (PDFs that are switched off,
+    // note transclusions, audio/video, Obsidian Bases — the latter only by the
+    // Obsidian plugin); the document shows an inline placeholder for each.
+    for src in &embeds {
+        let path = src.split_once('#').map_or(src.as_str(), |(p, _)| p).trim_end().to_ascii_lowercase();
+        if path.ends_with(".pdf") {
+            if pdf_mode == PdfEmbedMode::Off {
+                eprintln!(
+                    "warning: PDF embed '{src}' is switched off; inserted a placeholder note instead \
+                     (use --pdf-embeds fit or full to include it)."
+                );
+            }
+            // Other modes: included, or already reported when the file cannot be read.
+        } else if path.ends_with(".base") {
+            eprintln!(
+                "warning: embed '{src}' is not supported; inserted a placeholder note instead \
+                 (Obsidian Bases embeds are only rendered by the Omd2Typst Obsidian plugin)."
+            );
+        } else {
+            eprintln!("warning: embed '{src}' is not supported; inserted a placeholder note instead.");
+        }
     }
 
     // Warn when `appendix-from` names a chapter that does not exist.
@@ -216,8 +261,8 @@ fn main() -> Result<()> {
             image_reference_width: Some(cli.image_reference_width),
             wikilinks: cli.wikilinks.into(),
             obsidian_vault: cli.obsidian_vault.clone(),
-            // PDF annexes need Typst 0.14+; the embedded Typst is older, so they stay placeholders.
-            ..Default::default()
+            pdf_embeds: pdf_mode,
+            pdf_pages,
         },
     );
 
@@ -236,10 +281,8 @@ fn main() -> Result<()> {
                 .with_context(|| format!("Cannot write: {}", output_path))?;
         }
         Format::Pdf => {
-            let root = std::env::current_dir()
-                .context("Cannot determine current directory")?;
             let world = world::OmdWorld::new(root, typst_src);
-            let result = typst::compile::<typst::layout::PagedDocument>(&world);
+            let result = typst::compile::<typst_layout::PagedDocument>(&world);
 
             for warning in &result.warnings {
                 eprintln!("warning: {}", warning.message);
@@ -250,7 +293,7 @@ fn main() -> Result<()> {
                     .iter()
                     .map(|e| {
                         let file = e.span.id()
-                            .map(|id| id.vpath().as_rooted_path().display().to_string())
+                            .map(|id| id.vpath().get_with_slash().to_string())
                             .unwrap_or_else(|| "?".to_string());
                         format!("  {file}: {}", e.message)
                     })

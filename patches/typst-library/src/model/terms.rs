@@ -1,15 +1,10 @@
-use typst_utils::{Get, Numeric};
-
-use crate::diag::{bail, SourceResult};
-use crate::engine::Engine;
+use crate::diag::{bail, warning};
 use crate::foundations::{
-    cast, elem, scope, Array, Content, NativeElement, Packed, Show, Smart, StyleChain,
-    Styles, TargetElem,
+    Array, Content, NativeElement, Packed, Reflect, Smart, Styles, cast, elem, scope,
 };
-use crate::html::{tag, HtmlElem};
-use crate::layout::{Em, HElem, Length, Sides, StackChild, StackElem, VElem};
-use crate::model::{ListItemLike, ListLike, ParElem, ParbreakElem};
-use crate::text::TextElem;
+use crate::introspection::{Locatable, Tagged};
+use crate::layout::{Em, HElem, Length};
+use crate::model::{ListItemLike, ListLike};
 
 /// A list of terms and their descriptions.
 ///
@@ -17,22 +12,22 @@ use crate::text::TextElem;
 /// descriptions span over multiple lines, they use hanging indent to
 /// communicate the visual hierarchy.
 ///
-/// # Example
+/// = Example <example>
 /// ```example
 /// / Ligature: A merged glyph.
 /// / Kerning: A spacing adjustment
 ///   between two adjacent letters.
 /// ```
 ///
-/// # Syntax
+/// = Syntax <syntax>
 /// This function also has dedicated syntax: Starting a line with a slash,
 /// followed by a term, a colon and a description creates a term list item.
-#[elem(scope, title = "Term List", Show)]
+#[elem(scope, title = "Term List", Locatable, Tagged)]
 pub struct TermsElem {
-    /// Defines the default [spacing]($terms.spacing) of the term list. If it is
+    /// Defines the default @terms.spacing[spacing] of the term list. If it is
     /// `{false}`, the items are spaced apart with
-    /// [paragraph spacing]($par.spacing). If it is `{true}`, they use
-    /// [paragraph leading]($par.leading) instead. This makes the list more
+    /// @par.spacing[paragraph spacing]. If it is `{true}`, they use
+    /// @par.leading[paragraph leading] instead. This makes the list more
     /// compact, which can look better if the items are short.
     ///
     /// In markup mode, the value of this parameter is determined based on
@@ -66,7 +61,6 @@ pub struct TermsElem {
     /// / Colon: A nice separator symbol.
     /// ```
     #[default(HElem::new(Em::new(0.6).into()).with_weak(true).pack())]
-    #[borrowed]
     pub separator: Content,
 
     /// The indentation of each item.
@@ -86,9 +80,9 @@ pub struct TermsElem {
 
     /// The spacing between the items of the term list.
     ///
-    /// If set to `{auto}`, uses paragraph [`leading`]($par.leading) for tight
-    /// term lists and paragraph [`spacing`]($par.spacing) for wide
-    /// (non-tight) term lists.
+    /// If set to `{auto}`, uses paragraph @par.leading[`leading`] for tight
+    /// term lists and paragraph @par.spacing[`spacing`] for wide (non-tight)
+    /// term lists.
     pub spacing: Smart<Length>,
 
     /// The term list's children.
@@ -104,6 +98,19 @@ pub struct TermsElem {
     /// ) [/ #product: Born in #year.]
     /// ```
     #[variadic]
+    #[parse(
+        for item in args.items.iter() {
+            if item.name.is_none() && Array::castable(&item.value.v) {
+                engine.sink.warn(warning!(
+                    item.value.span,
+                    "implicit conversion from array to `terms.item` is deprecated";
+                    hint: "use `terms.item(term, description)` instead";
+                    hint: "this conversion was never documented and is being phased out";
+                ));
+            }
+        }
+        args.all()?
+    )]
     pub children: Vec<Packed<TermItem>>,
 
     /// Whether we are currently within a term list.
@@ -118,92 +125,8 @@ impl TermsElem {
     type TermItem;
 }
 
-impl Show for Packed<TermsElem> {
-    fn show(&self, _: &mut Engine, styles: StyleChain) -> SourceResult<Content> {
-        let span = self.span();
-        let tight = self.tight(styles);
-
-        if TargetElem::target_in(styles).is_html() {
-            return Ok(HtmlElem::new(tag::dl)
-                .with_body(Some(Content::sequence(self.children.iter().flat_map(
-                    |item| {
-                        // Text in wide term lists shall always turn into paragraphs.
-                        let mut description = item.description.clone();
-                        if !tight {
-                            description += ParbreakElem::shared();
-                        }
-
-                        [
-                            HtmlElem::new(tag::dt)
-                                .with_body(Some(item.term.clone()))
-                                .pack()
-                                .spanned(item.term.span()),
-                            HtmlElem::new(tag::dd)
-                                .with_body(Some(description))
-                                .pack()
-                                .spanned(item.description.span()),
-                        ]
-                    },
-                ))))
-                .pack());
-        }
-
-        let separator = self.separator(styles);
-        let indent = self.indent(styles);
-        let hanging_indent = self.hanging_indent(styles);
-        let gutter = self.spacing(styles).unwrap_or_else(|| {
-            if tight {
-                ParElem::leading_in(styles).into()
-            } else {
-                ParElem::spacing_in(styles).into()
-            }
-        });
-
-        let pad = hanging_indent + indent;
-        let unpad = (!hanging_indent.is_zero())
-            .then(|| HElem::new((-hanging_indent).into()).pack().spanned(span));
-
-        let mut children = vec![];
-        for child in self.children.iter() {
-            let mut seq = vec![];
-            seq.extend(unpad.clone());
-            seq.push(child.term.clone().strong());
-            seq.push((*separator).clone());
-            seq.push(child.description.clone());
-
-            // Text in wide term lists shall always turn into paragraphs.
-            if !tight {
-                seq.push(ParbreakElem::shared().clone());
-            }
-
-            children.push(StackChild::Block(Content::sequence(seq)));
-        }
-
-        let padding = Sides::default().with(TextElem::dir_in(styles).start(), pad.into());
-
-        let mut realized = StackElem::new(children)
-            .with_spacing(Some(gutter.into()))
-            .pack()
-            .spanned(span)
-            .padded(padding)
-            .styled(TermsElem::set_within(true));
-
-        if tight {
-            let leading = ParElem::leading_in(styles);
-            let spacing = VElem::new(leading.into())
-                .with_weak(true)
-                .with_attach(true)
-                .pack()
-                .spanned(span);
-            realized = spacing + realized;
-        }
-
-        Ok(realized)
-    }
-}
-
 /// A term list item.
-#[elem(name = "item", title = "Term List Item")]
+#[elem(name = "item", title = "Term List Item", Tagged)]
 pub struct TermItem {
     /// The term described by the list item.
     #[required]

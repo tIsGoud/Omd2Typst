@@ -1,9 +1,9 @@
-use crate::foundations::{cast, func, Cast, Content, Str};
+use crate::foundations::{Cast, Content, Str, cast, func};
 use crate::text::TextElem;
 
 /// Converts a string or content to lowercase.
 ///
-/// # Example
+/// = Example <example>
 /// ```example
 /// #lower("ABC") \
 /// #lower[*My Text*] \
@@ -19,7 +19,7 @@ pub fn lower(
 
 /// Converts a string or content to uppercase.
 ///
-/// # Example
+/// = Example <example>
 /// ```example
 /// #upper("abc") \
 /// #upper[*my text*] \
@@ -37,9 +37,7 @@ pub fn upper(
 fn case(text: Caseable, case: Case) -> Caseable {
     match text {
         Caseable::Str(v) => Caseable::Str(case.apply(&v).into()),
-        Caseable::Content(v) => {
-            Caseable::Content(v.styled(TextElem::set_case(Some(case))))
-        }
+        Caseable::Content(v) => Caseable::Content(v.set(TextElem::case, Some(case))),
     }
 }
 

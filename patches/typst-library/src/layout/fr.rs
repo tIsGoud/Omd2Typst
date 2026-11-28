@@ -5,7 +5,7 @@ use std::ops::{Add, Div, Mul, Neg};
 use ecow::EcoString;
 use typst_utils::{Numeric, Scalar};
 
-use crate::foundations::{repr, ty, Repr};
+use crate::foundations::{Repr, repr, ty};
 use crate::layout::Abs;
 
 /// Defines how the remaining space in a layout is distributed.
@@ -13,10 +13,10 @@ use crate::layout::Abs;
 /// Each fractionally sized element gets space based on the ratio of its
 /// fraction to the sum of all fractions.
 ///
-/// For more details, also see the [h] and [v] functions and the
-/// [grid function]($grid).
+/// For more details, also see the @h and @v functions and the
+/// @grid[`grid` function].
 ///
-/// # Example
+/// = Example <example>
 /// ```example
 /// Left #h(1fr) Left-ish #h(2fr) Right
 /// ```

@@ -1,17 +1,28 @@
 use std::fmt::{self, Debug, Formatter};
 use std::ops::Add;
+use std::slice;
 
-use ecow::{eco_format, eco_vec, EcoString, EcoVec};
+use comemo::Tracked;
+use ecow::{EcoString, EcoVec, eco_format, eco_vec};
 use typst_syntax::{Span, Spanned};
 
-use crate::diag::{bail, error, At, SourceDiagnostic, SourceResult, StrResult};
+use crate::diag::{At, SourceDiagnostic, SourceResult, StrResult, bail, error};
+use crate::engine::Engine;
 use crate::foundations::{
-    cast, func, repr, scope, ty, Array, Dict, FromValue, IntoValue, Repr, Str, Value,
+    Array, Context, Dict, FromValue, Func, IntoValue, Repr, Str, Value, cast, func, repr,
+    scope, ty,
 };
 
 /// Captured arguments to a function.
 ///
-/// # Argument Sinks
+/// Arguments are either _positional_ or _named,_ and can be accessed through
+/// the @arguments.pos[`pos`], @arguments.named[`named`], and
+/// @arguments.at[`at`] methods.
+///
+/// Additionally, named arguments can be accessed with @arguments.at[field
+/// syntax] similar to @dictionary[dictionaries].
+///
+/// = Argument Sinks <argument-sinks>
 /// Like built-in functions, custom functions can also take a variable number of
 /// arguments. You can specify an _argument sink_ which collects all excess
 /// arguments as `..sink`. The resulting `sink` value is of the `arguments`
@@ -29,7 +40,7 @@ use crate::foundations::{
 /// #format("ArtosFlow", "Jane", "Joe")
 /// ```
 ///
-/// # Spreading
+/// = Spreading <spreading>
 /// Inversely to an argument sink, you can _spread_ arguments, arrays and
 /// dictionaries into a function call with the `..spread` operator:
 ///
@@ -41,7 +52,6 @@ use crate::foundations::{
 /// ```
 #[ty(scope, cast, name = "arguments")]
 #[derive(Clone, Hash)]
-#[allow(clippy::derived_hash_with_manual_eq)]
 pub struct Args {
     /// The callsite span for the function. This is not the span of the argument
     /// list itself, but of the whole function call.
@@ -155,7 +165,7 @@ impl Args {
                 return error!(
                     item.span,
                     "the argument `{what}` is positional";
-                    hint: "try removing `{}:`", name,
+                    hint: "try removing `{name}:`";
                 );
             }
         }
@@ -272,6 +282,11 @@ cast! {
 }
 
 impl Args {
+    /// Tests whether there is no positional nor named argument.
+    pub fn is_empty(&self) -> bool {
+        self.items.is_empty()
+    }
+
     fn get(&self, key: &ArgumentKey) -> Option<&Value> {
         let item = match key {
             &ArgumentKey::Index(index) => {
@@ -290,6 +305,15 @@ impl Args {
             }
         };
         item.map(|item| &item.value.v)
+    }
+
+    /// Access a named argument as a field.
+    pub fn field(&self, field: &str) -> StrResult<&Value> {
+        self.items
+            .iter()
+            .rfind(|item| item.name.as_ref().map(|name| name.as_str()) == Some(field))
+            .ok_or_else(|| eco_format!("no named argument {}", field.repr()))
+            .map(|item| &item.value.v)
     }
 }
 
@@ -314,13 +338,23 @@ impl Args {
         args.take()
     }
 
+    /// The number of arguments, positional or named.
+    #[func(title = "Length")]
+    pub fn len(&self) -> usize {
+        self.items.len()
+    }
+
     /// Returns the positional argument at the specified index, or the named
     /// argument with the specified name.
     ///
-    /// If the key is an [integer]($int), this is equivalent to first calling
-    /// [`pos`]($arguments.pos) and then [`array.at`]. If it is a [string]($str),
-    /// this is equivalent to first calling [`named`]($arguments.named) and then
-    /// [`dictionary.at`].
+    /// If the key is an @int[integer], this is equivalent to first calling
+    /// @arguments.pos[`pos`] and then @array.at. If it is a @str[string], this
+    /// is equivalent to first calling @arguments.named[`named`] and then
+    /// @dictionary.at.
+    ///
+    /// Named arguments can also be accessed with field syntax (e.g.
+    /// `{arguments(key: 42).key}`) if no default is needed. Unlike
+    /// @dictionary[dictionaries], fields on arguments cannot be modified.
     #[func]
     pub fn at(
         &self,
@@ -352,6 +386,64 @@ impl Args {
         self.items
             .iter()
             .filter_map(|item| item.name.clone().map(|name| (name, item.value.v.clone())))
+            .collect()
+    }
+
+    /// Produces a new `arguments` with only the arguments for which the value
+    /// passes the test.
+    ///
+    /// ```example
+    /// #{
+    ///   arguments(-1, a: 0, b: 1, 2)
+    ///     .filter(v => v > 0)
+    /// }
+    /// ```
+    #[func]
+    pub fn filter(
+        self,
+        engine: &mut Engine,
+        context: Tracked<Context>,
+        /// The function to apply to each value. Must return a boolean.
+        test: Func,
+    ) -> SourceResult<Args> {
+        let mut run_test = |v: &Value| {
+            test.call(engine, context, [v.clone()])?
+                .cast::<bool>()
+                .at(test.span())
+        };
+        self.into_iter()
+            .filter_map(|arg| {
+                run_test(&arg.value.v).map(|b| b.then_some(arg)).transpose()
+            })
+            .collect()
+    }
+
+    /// Produces a new `arguments` by transforming each argument value with the
+    /// passed function.
+    ///
+    /// ```example
+    /// #{
+    ///   arguments(0, a: 1, 2)
+    ///     .map(v => v + 1)
+    /// }
+    /// ```
+    #[func]
+    pub fn map(
+        self,
+        engine: &mut Engine,
+        context: Tracked<Context>,
+        /// The function to apply to each value.
+        mapper: Func,
+    ) -> SourceResult<Args> {
+        self.into_iter()
+            .map(|arg| {
+                let mapped_value = mapper.call(engine, context, [arg.value.v])?;
+                Ok(Arg {
+                    span: arg.span,
+                    name: arg.name,
+                    value: Spanned::detached(mapped_value),
+                })
+            })
             .collect()
     }
 }
@@ -390,9 +482,35 @@ impl Add for Args {
     }
 }
 
+impl FromIterator<Arg> for Args {
+    fn from_iter<T: IntoIterator<Item = Arg>>(iter: T) -> Self {
+        Self {
+            span: Span::detached(),
+            items: iter.into_iter().collect(),
+        }
+    }
+}
+
+impl IntoIterator for Args {
+    type Item = Arg;
+    type IntoIter = <EcoVec<Arg> as IntoIterator>::IntoIter;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.items.into_iter()
+    }
+}
+
+impl<'a> IntoIterator for &'a Args {
+    type Item = &'a Arg;
+    type IntoIter = slice::Iter<'a, Arg>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.items.iter()
+    }
+}
+
 /// An argument to a function call: `12` or `draw: false`.
 #[derive(Clone, Hash)]
-#[allow(clippy::derived_hash_with_manual_eq)]
 pub struct Arg {
     /// The span of the whole argument.
     pub span: Span,
@@ -456,12 +574,13 @@ where
 /// The missing key access error message when no default was given.
 #[cold]
 fn missing_key_no_default(key: ArgumentKey) -> EcoString {
-    eco_format!(
-        "arguments do not contain key {} \
-         and no default value was specified",
-        match key {
-            ArgumentKey::Index(i) => i.repr(),
-            ArgumentKey::Name(name) => name.repr(),
-        }
-    )
+    match key {
+        ArgumentKey::Index(i) => eco_format!(
+            "no positional argument at index {i} and no default value was specified",
+        ),
+        ArgumentKey::Name(name) => eco_format!(
+            "no named argument {} and no default value was specified",
+            name.repr()
+        ),
+    }
 }

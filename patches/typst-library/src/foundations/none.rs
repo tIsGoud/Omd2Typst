@@ -5,7 +5,7 @@ use serde::{Serialize, Serializer};
 
 use crate::diag::HintedStrResult;
 use crate::foundations::{
-    cast, ty, CastInfo, FromValue, IntoValue, Reflect, Repr, Type, Value,
+    CastInfo, FromValue, IntoValue, Reflect, Repr, Type, Value, cast, ty,
 };
 
 /// A value that indicates the absence of any other value.
@@ -14,9 +14,10 @@ use crate::foundations::{
 ///
 /// When inserted into the document, it is not visible. This is also the value
 /// that is produced by empty code blocks. It can be
-/// [joined]($scripting/#blocks) with any value, yielding the other value.
+/// @reference:scripting:blocks[joined] with any value, yielding the other
+/// value.
 ///
-/// # Example
+/// = Example <example>
 /// ```example
 /// Not visible: #none
 /// ```
@@ -109,6 +110,15 @@ impl<T: FromValue> FromValue for Option<T> {
             Value::None => Ok(None),
             v if T::castable(&v) => Ok(Some(T::from_value(v)?)),
             _ => Err(Self::error(&value)),
+        }
+    }
+}
+
+impl<T: Repr> Repr for Option<T> {
+    fn repr(&self) -> EcoString {
+        match self {
+            Some(r) => r.repr(),
+            None => NoneValue.repr(),
         }
     }
 }

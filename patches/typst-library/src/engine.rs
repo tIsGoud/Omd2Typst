@@ -1,28 +1,31 @@
 //! Definition of the central compilation context.
 
-use std::collections::HashSet;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use comemo::{Track, Tracked, TrackedMut, Validate};
+use comemo::{Track, Tracked, TrackedMut};
 use ecow::EcoVec;
 use rayon::iter::{IndexedParallelIterator, IntoParallelIterator, ParallelIterator};
+use rustc_hash::FxHashSet;
 use typst_syntax::{FileId, Span};
+use typst_utils::{LazyHash, Protected};
 
-use crate::diag::{bail, HintedStrResult, SourceDiagnostic, SourceResult, StrResult};
+use crate::diag::{HintedStrResult, SourceDiagnostic, SourceResult, StrResult, bail};
 use crate::foundations::{Styles, Value};
-use crate::introspection::Introspector;
-use crate::routines::Routines;
-use crate::World;
+use crate::introspection::{Introspect, Introspection, Introspector};
+use crate::{Library, World};
 
 /// Holds all data needed during compilation.
 pub struct Engine<'a> {
-    /// Defines implementation of various Typst compiler routines as a table of
-    /// function pointers.
-    pub routines: &'a Routines,
     /// The compilation environment.
     pub world: Tracked<'a, dyn World + 'a>,
+    /// Definition of Typst's standard library.
+    ///
+    /// Can be accessed via `world.library()`, but we fetch it once upfront
+    /// because it's accessed so frequently and we want to avoid the overhead of
+    /// the tracked call.
+    pub library: &'a LazyHash<Library>,
     /// Provides access to information about the document.
-    pub introspector: Tracked<'a, Introspector>,
+    pub introspector: Protected<Tracked<'a, dyn Introspector + 'a>>,
     /// May hold a span that is currently under inspection.
     pub traced: Tracked<'a, Traced>,
     /// A pure sink for warnings, delayed errors, and spans under inspection.
@@ -40,14 +43,18 @@ impl Engine<'_> {
         match result {
             Ok(value) => value,
             Err(errors) => {
-                self.sink.delay(errors);
+                self.sink.delayed_errors(errors);
                 T::default()
             }
         }
     }
 
     /// Runs tasks on the engine in parallel.
-    pub fn parallelize<P, I, T, U, F>(&mut self, iter: P, f: F) -> impl Iterator<Item = U>
+    pub fn parallelize<P, I, T, U, F>(
+        &mut self,
+        iter: P,
+        f: F,
+    ) -> impl Iterator<Item = U> + use<P, I, T, U, F>
     where
         P: IntoIterator<IntoIter = I>,
         I: Iterator<Item = T>,
@@ -56,7 +63,7 @@ impl Engine<'_> {
         F: Fn(&mut Engine, T) -> U + Send + Sync,
     {
         let Engine {
-            world, introspector, traced, ref route, routines, ..
+            world, introspector, traced, ref route, library, ..
         } = *self;
 
         // We collect into a vector and then call `into_par_iter` instead of
@@ -74,7 +81,7 @@ impl Engine<'_> {
                     traced,
                     sink: sink.track_mut(),
                     route: route.clone(),
-                    routines,
+                    library,
                 };
                 (f(&mut engine, value), sink)
             })
@@ -83,10 +90,30 @@ impl Engine<'_> {
         // Apply the subsinks to the outer sink.
         for (_, sink) in &mut pairs {
             let sink = std::mem::take(sink);
-            self.sink.extend(sink.delayed, sink.warnings, sink.values);
+            self.sink.extend(
+                sink.introspections,
+                sink.delayed,
+                sink.warnings,
+                sink.values,
+            );
         }
 
         pairs.into_iter().map(|(output, _)| output)
+    }
+
+    /// Performs an introspection on the introspector and returns its result.
+    ///
+    /// As a side effect, the introspection is stored in the sink. If the
+    /// document does not converge, the recorded introspections are used to
+    /// determine the cause of non-convergence.
+    pub fn introspect<I>(&mut self, introspection: I) -> I::Output
+    where
+        I: Introspect,
+    {
+        let introspector = *self.introspector.access("is okay since we're recording it");
+        let output = introspection.introspect(self, introspector);
+        self.sink.introspection(Introspection::new(introspection));
+        output
     }
 }
 
@@ -111,21 +138,20 @@ impl Traced {
     /// We hide the span if it isn't in the given file so that only results for
     /// the file with the traced span are invalidated.
     pub fn get(&self, id: FileId) -> Option<Span> {
-        if self.0.and_then(Span::id) == Some(id) {
-            self.0
-        } else {
-            None
-        }
+        if self.0.and_then(Span::id) == Some(id) { self.0 } else { None }
     }
 }
 
-/// A push-only sink for delayed errors, warnings, and traced values.
+/// A push-only sink for recorded introspections, delayed errors, warnings, and
+/// traced values.
 ///
 /// All tracked methods of this type are of the form `(&mut self, ..) -> ()`, so
 /// in principle they do not need validation (though that optimization is not
 /// yet implemented in comemo).
 #[derive(Default, Clone)]
 pub struct Sink {
+    /// Introspections that were performed during compilation.
+    introspections: EcoVec<Introspection>,
     /// Delayed errors: Those are errors that we can ignore until the last
     /// iteration. For instance, show rules may throw during earlier iterations
     /// because the introspector is not yet ready. We first ignore that and
@@ -135,7 +161,7 @@ pub struct Sink {
     /// Warnings emitted during iteration.
     warnings: EcoVec<SourceDiagnostic>,
     /// Hashes of all warning's spans and messages for warning deduplication.
-    warnings_set: HashSet<u128>,
+    warnings_set: FxHashSet<u128>,
     /// A sequence of traced values for a span.
     values: EcoVec<(Value, Option<Styles>)>,
 }
@@ -147,6 +173,11 @@ impl Sink {
     /// Create a new empty sink.
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// Get the introspections.
+    pub fn introspections(&self) -> &[Introspection] {
+        &self.introspections
     }
 
     /// Get the stored delayed errors.
@@ -166,14 +197,24 @@ impl Sink {
 
     /// Extend from another sink.
     pub fn extend_from_sink(&mut self, other: Sink) {
-        self.extend(other.delayed, other.warnings, other.values);
+        self.extend(other.introspections, other.delayed, other.warnings, other.values);
     }
 }
 
 #[comemo::track]
 impl Sink {
-    /// Push delayed errors.
-    pub fn delay(&mut self, errors: EcoVec<SourceDiagnostic>) {
+    /// Trace an introspection.
+    pub fn introspection(&mut self, introspection: Introspection) {
+        self.introspections.push(introspection);
+    }
+
+    /// Add a delayed error.
+    pub fn delayed_error(&mut self, error: SourceDiagnostic) {
+        self.delayed.push(error);
+    }
+
+    /// Add multiple delayed errors.
+    pub fn delayed_errors(&mut self, errors: EcoVec<SourceDiagnostic>) {
         self.delayed.extend(errors);
     }
 
@@ -196,10 +237,12 @@ impl Sink {
     /// Extend from parts of another sink.
     fn extend(
         &mut self,
+        introspections: EcoVec<Introspection>,
         delayed: EcoVec<SourceDiagnostic>,
         warnings: EcoVec<SourceDiagnostic>,
         values: EcoVec<(Value, Option<Styles>)>,
     ) {
+        self.introspections.extend(introspections);
         self.delayed.extend(delayed);
         for warning in warnings {
             self.warn(warning);
@@ -219,7 +262,7 @@ pub struct Route<'a> {
     // We need to override the constraint's lifetime here so that `Tracked` is
     // covariant over the constraint. If it becomes invariant, we're in for a
     // world of lifetime pain.
-    outer: Option<Tracked<'a, Self, <Route<'static> as Validate>::Constraint>>,
+    outer: Option<Tracked<'a, Self, <Route<'static> as Track>::Call>>,
     /// This is set if this route segment was inserted through the start of a
     /// module evaluation.
     id: Option<FileId>,
@@ -312,7 +355,8 @@ impl Route<'_> {
         if !self.within(Route::MAX_SHOW_RULE_DEPTH) {
             bail!(
                 "maximum show rule depth exceeded";
-                hint: "check whether the show rule matches its own output"
+                hint: "maybe a show rule matches its own output";
+                hint: "maybe there are too deeply nested elements";
             );
         }
         Ok(())
@@ -323,7 +367,7 @@ impl Route<'_> {
         if !self.within(Route::MAX_LAYOUT_DEPTH) {
             bail!(
                 "maximum layout depth exceeded";
-                hint: "try to reduce the amount of nesting in your layout",
+                hint: "try to reduce the amount of nesting in your layout";
             );
         }
         Ok(())
@@ -334,7 +378,7 @@ impl Route<'_> {
         if !self.within(Route::MAX_HTML_DEPTH) {
             bail!(
                 "maximum HTML depth exceeded";
-                hint: "try to reduce the amount of nesting of your HTML",
+                hint: "try to reduce the amount of nesting of your HTML";
             );
         }
         Ok(())

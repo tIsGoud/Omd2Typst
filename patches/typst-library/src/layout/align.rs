@@ -1,20 +1,20 @@
 use std::ops::Add;
 
-use ecow::{eco_format, EcoString};
+use ecow::{EcoString, eco_format};
 
-use crate::diag::{bail, HintedStrResult, SourceResult, StrResult};
-use crate::engine::Engine;
+use crate::diag::{HintedStrResult, StrResult, bail};
 use crate::foundations::{
-    cast, elem, func, scope, ty, CastInfo, Content, Fold, FromValue, IntoValue, Packed,
-    Reflect, Repr, Resolve, Show, StyleChain, Value,
+    CastInfo, Content, Fold, FromValue, IntoValue, Reflect, Repr, Resolve, StyleChain,
+    Value, cast, elem, func, scope, ty,
 };
 use crate::layout::{Abs, Axes, Axis, Dir, Side};
 use crate::text::TextElem;
 
 /// Aligns content horizontally and vertically.
 ///
-/// # Example
+/// = Example <example>
 /// Let's start with centering our content horizontally:
+///
 /// ```example
 /// #set page(height: 120pt)
 /// #set align(center)
@@ -26,6 +26,7 @@ use crate::text::TextElem;
 /// ```
 ///
 /// To center something vertically, use _horizon_ alignment:
+///
 /// ```example
 /// #set page(height: 120pt)
 /// #set align(horizon)
@@ -35,10 +36,11 @@ use crate::text::TextElem;
 /// a new paragraph.
 /// ```
 ///
-/// # Combining alignments
+/// = Combining alignments <combining-alignments>
 /// You can combine two alignments with the `+` operator. Let's also only apply
 /// this to one piece of content by using the function form instead of a set
 /// rule:
+///
 /// ```example
 /// #set page(height: 120pt)
 /// Though left in the beginning ...
@@ -50,7 +52,7 @@ use crate::text::TextElem;
 /// ]
 /// ```
 ///
-/// # Nested alignment
+/// = Nested alignment <nested-alignment>
 /// You can use varying alignments for layout containers and the elements within
 /// them. This way, you can create intricate layouts:
 ///
@@ -65,17 +67,17 @@ use crate::text::TextElem;
 /// ])
 /// ```
 ///
-/// # Alignment within the same line
+/// = Alignment within the same line <alignment-within-the-same-line>
 /// The `align` function performs block-level alignment and thus always
-/// interrupts the current paragraph. To have different alignment for parts
-/// of the same line, you should use [fractional spacing]($h) instead:
+/// interrupts the current paragraph. To have different alignment for parts of
+/// the same line, you should use @h[fractional spacing] instead:
 ///
 /// ```example
 /// Start #h(1fr) End
 /// ```
-#[elem(Show)]
+#[elem]
 pub struct AlignElem {
-    /// The [alignment] along both axes.
+    /// The @alignment[alignment] along both axes.
     ///
     /// ```example
     /// #set page(height: 6cm)
@@ -97,20 +99,12 @@ pub struct AlignElem {
     pub body: Content,
 }
 
-impl Show for Packed<AlignElem> {
-    #[typst_macros::time(name = "align", span = self.span())]
-    fn show(&self, _: &mut Engine, styles: StyleChain) -> SourceResult<Content> {
-        Ok(self.body.clone().aligned(self.alignment(styles)))
-    }
-}
-
-/// Where to [align] something along an axis.
+/// Where to align something along an axis.
 ///
 /// Possible values are:
-/// - `start`: Aligns at the [start]($direction.start) of the [text
-///   direction]($text.dir).
-/// - `end`: Aligns at the [end]($direction.end) of the [text
-///   direction]($text.dir).
+/// - `start`: Aligns at the @direction.start[start] of the
+///   @text.dir[text direction].
+/// - `end`: Aligns at the @direction.end[end] of the @text.dir[text direction].
 /// - `left`: Align at the left.
 /// - `center`: Aligns in the middle, horizontally.
 /// - `right`: Aligns at the right.
@@ -126,7 +120,7 @@ impl Show for Packed<AlignElem> {
 /// #align(alignment.center)[Hi]
 /// ```
 ///
-/// # 2D alignments
+/// = 2D alignments <2d-alignments>
 /// To align along both axes at the same time, add the two alignments using the
 /// `+` operator. For example, `top + right` aligns the content to the top right
 /// corner.
@@ -136,7 +130,7 @@ impl Show for Packed<AlignElem> {
 /// #align(center + bottom)[Hi]
 /// ```
 ///
-/// # Fields
+/// = Fields <fields>
 /// The `x` and `y` fields hold the alignment's horizontal and vertical
 /// components, respectively (as yet another `alignment`). They may be `{none}`.
 ///
@@ -277,7 +271,7 @@ impl Resolve for Alignment {
     type Output = Axes<FixedAlignment>;
 
     fn resolve(self, styles: StyleChain) -> Self::Output {
-        self.fix(TextElem::dir_in(styles))
+        self.fix(styles.resolve(TextElem::dir))
     }
 }
 
@@ -368,7 +362,7 @@ impl TryFrom<Alignment> for HAlignment {
             Alignment::H(h) => Ok(h),
             v => bail!(
                 "expected `start`, `left`, `center`, `right`, or `end`, found {}",
-                v.repr()
+                v.repr(),
             ),
         }
     }
@@ -378,7 +372,7 @@ impl Resolve for HAlignment {
     type Output = FixedAlignment;
 
     fn resolve(self, styles: StyleChain) -> Self::Output {
-        self.fix(TextElem::dir_in(styles))
+        self.fix(styles.resolve(TextElem::dir))
     }
 }
 
@@ -414,7 +408,7 @@ impl Resolve for OuterHAlignment {
     type Output = FixedAlignment;
 
     fn resolve(self, styles: StyleChain) -> Self::Output {
-        self.fix(TextElem::dir_in(styles))
+        self.fix(styles.resolve(TextElem::dir))
     }
 }
 
@@ -636,7 +630,7 @@ where
     type Output = Axes<FixedAlignment>;
 
     fn resolve(self, styles: StyleChain) -> Self::Output {
-        self.fix(TextElem::dir_in(styles))
+        self.fix(styles.resolve(TextElem::dir))
     }
 }
 

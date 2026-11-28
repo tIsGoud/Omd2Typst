@@ -1,11 +1,29 @@
-use crate::diag::bail;
-use crate::foundations::{cast, elem, func, Content, NativeElement, SymbolElem};
-use crate::layout::{Length, Rel};
+use std::collections::HashMap;
+use std::sync::LazyLock;
+
+use bumpalo::Bump;
+use comemo::Tracked;
+use icu_properties::CodePointMapDataBorrowed;
+use icu_properties::props::CanonicalCombiningClass;
+
+use crate::engine::Engine;
+use crate::foundations::{
+    Args, CastInfo, Content, Context, Func, IntoValue, NativeElement, NativeFuncData,
+    NativeFuncPtr, NativeParamInfo, Reflect, Scope, Str, SymbolElem, Type, cast, elem,
+};
+use crate::layout::{Em, Length, Rel};
 use crate::math::Mathy;
+
+/// How much the accent can be shorter than the base.
+pub const ACCENT_SHORT_FALL: Em = Em::new(0.5);
 
 /// Attaches an accent to a base.
 ///
-/// # Example
+/// In math mode, common accents are also available as named @symbol[symbols]
+/// that can be directly called (like @function[functions]) to attach them to
+/// some content.
+///
+/// = Example <example>
 /// ```example
 /// $grave(a) = accent(a, `)$ \
 /// $arrow(a) = accent(a, arrow)$ \
@@ -13,8 +31,8 @@ use crate::math::Mathy;
 /// ```
 #[elem(Mathy)]
 pub struct AccentElem {
-    /// The base to which the accent is applied.
-    /// May consist of multiple letters.
+    /// The base to which the accent is applied. May consist of multiple
+    /// letters.
     ///
     /// ```example
     /// $arrow(A B C)$
@@ -26,34 +44,130 @@ pub struct AccentElem {
     ///
     /// Supported accents include:
     ///
-    /// | Accent        | Name            | Codepoint |
-    /// | ------------- | --------------- | --------- |
-    /// | Grave         | `grave`         | <code>&DiacriticalGrave;</code> |
-    /// | Acute         | `acute`         | `´`       |
-    /// | Circumflex    | `hat`           | `^`       |
-    /// | Tilde         | `tilde`         | `~`       |
-    /// | Macron        | `macron`        | `¯`       |
-    /// | Dash          | `dash`          | `‾`       |
-    /// | Breve         | `breve`         | `˘`       |
-    /// | Dot           | `dot`           | `.`       |
-    /// | Double dot, Diaeresis | `dot.double`, `diaer` | `¨` |
-    /// | Triple dot    | `dot.triple`    | <code>&tdot;</code> |
-    /// | Quadruple dot | `dot.quad`      | <code>&DotDot;</code> |
-    /// | Circle        | `circle`        | `∘`       |
-    /// | Double acute  | `acute.double`  | `˝`       |
-    /// | Caron         | `caron`         | `ˇ`       |
-    /// | Right arrow   | `arrow`, `->`   | `→`       |
-    /// | Left arrow    | `arrow.l`, `<-` | `←`       |
-    /// | Left/Right arrow | `arrow.l.r`  | `↔`       |
-    /// | Right harpoon | `harpoon`       | `⇀`       |
-    /// | Left harpoon  | `harpoon.lt`    | `↼`       |
+    /// #docs-table(
+    ///   table.header[Accent][Name][Codepoint],
+    ///
+    ///   [Grave],
+    ///   [`grave`],
+    ///   [``` ` ```],
+    ///
+    ///   [Acute],
+    ///   [`acute`],
+    ///   [`´`],
+    ///
+    ///   [Circumflex],
+    ///   [`hat`],
+    ///   [`^`],
+    ///
+    ///   [Tilde],
+    ///   [`tilde`],
+    ///   [`~`],
+    ///
+    ///   [Macron],
+    ///   [`macron`],
+    ///   [`¯`],
+    ///
+    ///   [Dash],
+    ///   [`dash`],
+    ///   [`‾`],
+    ///
+    ///   [Breve],
+    ///   [`breve`],
+    ///   [`˘`],
+    ///
+    ///   [Dot],
+    ///   [`dot`],
+    ///   [`.`],
+    ///
+    ///   [Double dot, Diaeresis],
+    ///   [`dot.double`, `diaer`],
+    ///   [`¨`],
+    ///
+    ///   [Triple dot],
+    ///   [`dot.triple`],
+    ///   raw(lang: "typ", "\\u{20db}"),
+    ///
+    ///   [Quadruple dot],
+    ///   [`dot.quad`],
+    ///   raw(lang: "typ", "\\u{20dc}"),
+    ///
+    ///   [Circle],
+    ///   [`circle`],
+    ///   [`∘`],
+    ///
+    ///   [Double acute],
+    ///   [`acute.double`],
+    ///   [`˝`],
+    ///
+    ///   [Caron],
+    ///   [`caron`],
+    ///   [`ˇ`],
+    ///
+    ///   [Right arrow],
+    ///   [`arrow`, `->`],
+    ///   [`→`],
+    ///
+    ///   [Left arrow],
+    ///   [`arrow.l`, `<-`],
+    ///   [`←`],
+    ///
+    ///   [Left/Right arrow],
+    ///   [`arrow.l.r`],
+    ///   [`↔`],
+    ///
+    ///   [Right harpoon],
+    ///   [`harpoon`],
+    ///   [`⇀`],
+    ///
+    ///   [Left harpoon],
+    ///   [`harpoon.lt`],
+    ///   [`↼`],
+    /// )
     #[required]
     pub accent: Accent,
 
     /// The size of the accent, relative to the width of the base.
-    #[resolve]
+    ///
+    /// #example(
+    ///   title: "Basic usage",
+    ///   ```
+    ///   $dash(A, size: #150%)$
+    ///   ```
+    /// )
+    ///
+    /// Note that the resulting accent may not have the exact desired size. For
+    /// example, an arrow may be either a pre-defined short glyph, or a long
+    /// glyph assembled from building blocks (arrowhead + line) provided by the
+    /// font. The sizes of the two possibilities may not cover the entire span.
+    /// Consequently, arrows of certain intermediate sizes cannot be
+    /// constructed.
+    ///
+    /// #example(
+    ///   title: "Size of arrow growing discontinuously",
+    ///   ```
+    ///   >>> #set par(spacing: 0.3em)
+    ///   #for i in range(6) {
+    ///     $ arrow(#box(
+    ///       width: 0.4em + 0.3em * i,
+    ///       fill: aqua,
+    ///       height: 0.4em,
+    ///     )) $
+    ///   }
+    ///   ```
+    /// )
     #[default(Rel::one())]
     pub size: Rel<Length>,
+
+    /// Whether to remove the dot on top of lowercase i and j when adding a top
+    /// accent.
+    ///
+    /// This enables the `dtls` OpenType feature.
+    ///
+    /// ```example
+    /// $hat(dotless: #false, i)$
+    /// ```
+    #[default(true)]
+    pub dotless: bool,
 }
 
 /// An accent character.
@@ -61,88 +175,166 @@ pub struct AccentElem {
 pub struct Accent(pub char);
 
 impl Accent {
-    /// Normalize a character into an accent.
-    pub fn new(c: char) -> Self {
-        Self(Self::combine(c).unwrap_or(c))
+    /// Tries to select the appropriate combining accent for a string, falling
+    /// back to the string's lone character if there is no corresponding one.
+    ///
+    /// Returns `None` if there isn't one and the string has more than one
+    /// character.
+    pub fn normalize(s: &str) -> Option<Self> {
+        Self::combining(s).or_else(|| s.parse::<char>().ok().map(Self))
+    }
+
+    /// Tries to select a well-known combining accent that matches for the
+    /// value.
+    pub fn combining(value: &str) -> Option<Self> {
+        let c = value.parse::<char>().ok();
+        ACCENTS
+            .iter()
+            .copied()
+            .find(|&(accent, names)| Some(accent) == c || names.contains(&value))
+            .map(|(accent, _)| Self(accent))
+    }
+
+    /// Whether this accent is a bottom accent or not.
+    pub fn is_bottom(&self) -> bool {
+        if matches!(self.0, '⏟' | '⎵' | '⏝' | '⏡') {
+            return true;
+        }
+
+        const COMBINING_CLASS_DATA: CodePointMapDataBorrowed<CanonicalCombiningClass> =
+            CodePointMapDataBorrowed::new();
+
+        matches!(COMBINING_CLASS_DATA.get(self.0), CanonicalCombiningClass::Below)
     }
 }
 
-/// This macro generates accent-related functions.
-///
-/// ```ignore
-/// accents! {
-///     '\u{0300}' | '`' => grave,
-/// //  ^^^^^^^^^    ^^^    ^^^^^
-/// //  |            |      |
-/// //  |            |      +-- The name of the function.
-/// //  |            +--------- The alternative characters that represent the accent.
-/// //  +---------------------- The primary character that represents the accent.
-/// }
-/// ```
-///
-/// When combined with the `Accent::combine` function, accent characters can be normalized
-/// to the primary character.
-macro_rules! accents {
-    ($($primary:literal $(| $alt:literal)* => $name:ident),* $(,)?) => {
-        impl Accent {
-            /// Normalize an accent to a combining one.
-            pub fn combine(c: char) -> Option<char> {
-                Some(match c {
-                    $($primary $(| $alt)* => $primary,)*
-                    _ => return None,
-                })
-            }
-        }
-
-        $(
-            /// The accent function for callable symbol definitions.
-            #[func]
-            pub fn $name(
-                /// The base to which the accent is applied.
-                base: Content,
-                /// The size of the accent, relative to the width of the base.
-                #[named]
-                size: Option<Rel<Length>>,
-            ) -> Content {
-                let mut accent = AccentElem::new(base, Accent::new($primary));
-                if let Some(size) = size {
-                    accent = accent.with_size(size);
-                }
-                accent.pack()
-            }
-        )+
-    };
+/// Gets the accent function corresponding to a symbol value, if any.
+pub fn get_accent_func(value: &str) -> Option<Func> {
+    Accent::combining(value).map(|accent| (&FUNCS[&accent]).into())
 }
 
-// Keep it synced with the documenting table above.
-accents! {
-    '\u{0300}' | '`' => grave,
-    '\u{0301}' | '´' => acute,
-    '\u{0302}' | '^' | 'ˆ' => hat,
-    '\u{0303}' | '~' | '∼' | '˜' => tilde,
-    '\u{0304}' | '¯' => macron,
-    '\u{0305}' | '-' | '‾' | '−' => dash,
-    '\u{0306}' | '˘' => breve,
-    '\u{0307}' | '.' | '˙' | '⋅' => dot,
-    '\u{0308}' | '¨' => dot_double,
-    '\u{20db}' => dot_triple,
-    '\u{20dc}' => dot_quad,
-    '\u{030a}' | '∘' | '○' => circle,
-    '\u{030b}' | '˝' => acute_double,
-    '\u{030c}' | 'ˇ' => caron,
-    '\u{20d6}' | '←' => arrow_l,
-    '\u{20d7}' | '→' | '⟶' => arrow,
-    '\u{20e1}' | '↔' | '⟷' => arrow_l_r,
-    '\u{20d0}' | '↼' => harpoon_lt,
-    '\u{20d1}' | '⇀' => harpoon,
+// Keep it synced with the documenting table above and the
+// `math-accent-sym-call` test.`
+/// A list of accents, each with a list of alternative names.
+const ACCENTS: &[(char, &[&str])] = &[
+    // Note: Symbols that can have a text presentation must explicitly have that
+    // alternative listed here.
+    ('\u{0300}', &["`"]),
+    ('\u{0301}', &["´"]),
+    ('\u{0302}', &["^", "ˆ"]),
+    ('\u{0303}', &["~", "∼", "˜"]),
+    ('\u{0304}', &["¯"]),
+    ('\u{0305}', &["-", "–", "‾", "−"]),
+    ('\u{0306}', &["˘"]),
+    ('\u{0307}', &[".", "˙", "⋅"]),
+    ('\u{0308}', &["¨"]),
+    ('\u{20db}', &[]),
+    ('\u{20dc}', &[]),
+    ('\u{030a}', &["∘", "○"]),
+    ('\u{030b}', &["˝"]),
+    ('\u{030c}', &["ˇ"]),
+    ('\u{20d6}', &["←"]),
+    ('\u{20d7}', &["→", "⟶"]),
+    ('\u{20e1}', &["↔", "↔\u{fe0e}", "⟷"]),
+    ('\u{20d0}', &["↼"]),
+    ('\u{20d1}', &["⇀"]),
+];
+
+/// Lazily created accent functions.
+static FUNCS: LazyLock<HashMap<Accent, NativeFuncData>> = LazyLock::new(|| {
+    let bump = Box::leak(Box::new(Bump::new()));
+    ACCENTS
+        .iter()
+        .copied()
+        .map(|(accent, _)| (Accent(accent), create_accent_func_data(accent, bump)))
+        .collect()
+});
+
+/// Creates metadata for an accent wrapper function.
+fn create_accent_func_data(accent: char, bump: &'static Bump) -> NativeFuncData {
+    let title = bumpalo::format!(in bump, "Accent ({})", accent).into_bump_str();
+    let docs = bumpalo::format!(in bump, "Adds the accent {} on an expression.", accent)
+        .into_bump_str();
+    NativeFuncData {
+        function: NativeFuncPtr(bump.alloc(
+            move |_: &mut Engine, _: Tracked<Context>, args: &mut Args| {
+                let base = args.expect("base")?;
+                let size = args.named("size")?;
+                let dotless = args.named("dotless")?;
+                let mut elem = AccentElem::new(base, Accent(accent));
+                if let Some(size) = size {
+                    elem = elem.with_size(size);
+                }
+                if let Some(dotless) = dotless {
+                    elem = elem.with_dotless(dotless);
+                }
+                Ok(elem.pack().into_value())
+            },
+        )),
+        name: "(..) => ..",
+        title,
+        docs,
+        def_site: None,
+        keywords: &[],
+        contextual: false,
+        scope: LazyLock::new(&|| Scope::new()),
+        params: LazyLock::new(&|| create_accent_param_info()),
+        returns: LazyLock::new(&|| CastInfo::Type(Type::of::<Content>())),
+    }
+}
+
+/// Creates parameter signature metadata for an accent function.
+fn create_accent_param_info() -> Vec<NativeParamInfo> {
+    vec![
+        NativeParamInfo {
+            name: "base",
+            docs: "The base to which the accent is applied.",
+            def_site: None,
+            input: Content::input(),
+            default: None,
+            positional: true,
+            named: false,
+            variadic: false,
+            required: true,
+            settable: false,
+        },
+        NativeParamInfo {
+            name: "size",
+            docs: "The size of the accent, relative to the width of the base.",
+            def_site: None,
+            input: Rel::<Length>::input(),
+            default: None,
+            positional: false,
+            named: true,
+            variadic: false,
+            required: false,
+            settable: false,
+        },
+        NativeParamInfo {
+            name: "dotless",
+            docs: "Whether to remove the dot on top of lowercase i and j when adding a top accent.",
+            def_site: None,
+            input: bool::input(),
+            default: None,
+            positional: false,
+            named: true,
+            variadic: false,
+            required: false,
+            settable: false,
+        },
+    ]
 }
 
 cast! {
     Accent,
     self => self.0.into_value(),
-    v: char => Self::new(v),
-    v: Content => match v.to_packed::<SymbolElem>() {
-        Some(elem) => Self::new(elem.text),
-        None => bail!("expected a symbol"),
-    },
+    // The string cast handles
+    // - strings: `accent(a, "↔")`
+    // - symbol values: `accent(a, <->)`
+    // - shorthands: `accent(a, arrow.l.r)`
+    v: Str => Self::normalize(&v).ok_or("expected exactly one character")?,
+    // The content cast is for accent uses like `accent(a, ↔)`
+    v: Content => v.to_packed::<SymbolElem>()
+        .and_then(|elem| Accent::normalize(&elem.text))
+        .ok_or("expected a single-codepoint symbol")?,
 }

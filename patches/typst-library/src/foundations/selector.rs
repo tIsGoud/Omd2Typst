@@ -2,15 +2,17 @@ use std::any::{Any, TypeId};
 use std::sync::Arc;
 
 use comemo::Tracked;
-use ecow::{eco_format, EcoString, EcoVec};
+use ecow::{EcoString, EcoVec, eco_format};
 use smallvec::SmallVec;
+use typst_syntax::Span;
 
-use crate::diag::{bail, HintedStrResult, StrResult};
+use crate::diag::{At, HintedStrResult, SourceResult, StrResult, bail};
+use crate::engine::Engine;
 use crate::foundations::{
-    cast, func, repr, scope, ty, CastInfo, Content, Context, Dict, Element, FromValue,
-    Func, Label, Reflect, Regex, Repr, Str, StyleChain, Symbol, Type, Value,
+    CastInfo, Content, Context, Dict, Element, FromValue, Func, Label, Reflect, Regex,
+    Repr, Str, StyleChain, Symbol, Type, Value, cast, func, repr, scope, ty,
 };
-use crate::introspection::{Introspector, Locatable, Location, Unqueriable};
+use crate::introspection::{Locatable, Location, QueryUniqueIntrospection, Unqueriable};
 
 /// A helper macro to create a field selector used in [`Selector::Elem`]
 #[macro_export]
@@ -18,15 +20,15 @@ use crate::introspection::{Introspector, Locatable, Location, Unqueriable};
 macro_rules! __select_where {
     ($ty:ty $(, $field:ident => $value:expr)* $(,)?) => {{
         #[allow(unused_mut)]
-        let mut fields = ::smallvec::SmallVec::new();
+        let mut fields = $crate::foundations::SmallVec::new();
         $(
             fields.push((
-                <$ty as $crate::foundations::Fields>::Enum::$field as u8,
+                <$ty>::$field.index(),
                 $crate::foundations::IntoValue::into_value($value),
             ));
         )*
         $crate::foundations::Selector::Elem(
-            <$ty as $crate::foundations::NativeElement>::elem(),
+            <$ty as $crate::foundations::NativeElement>::ELEM,
             Some(fields),
         )
     }};
@@ -37,28 +39,28 @@ pub use crate::__select_where as select_where;
 
 /// A filter for selecting elements within the document.
 ///
-/// You can construct a selector in the following ways:
-/// - you can use an element [function]
-/// - you can filter for an element function with
-///   [specific fields]($function.where)
-/// - you can use a [string]($str) or [regular expression]($regex)
-/// - you can use a [`{<label>}`]($label)
-/// - you can use a [`location`]
-/// - call the [`selector`] constructor to convert any of the above types into a
+/// To construct a selector you can:
+/// - use an @function:element-functions[element function]
+/// - filter for an element function with @function.where[specific fields]
+/// - use a @str[string] or @regex[regular expression]
+/// - use a @label[`{<label>}`]
+/// - use a @location
+/// - call the @selector constructor to convert any of the above types into a
 ///   selector value and use the methods below to refine it
 ///
-/// Selectors are used to [apply styling rules]($styling/#show-rules) to
-/// elements. You can also use selectors to [query] the document for certain
-/// types of elements.
+/// Selectors are used to @reference:styling:show-rules[apply styling rules] to
+/// elements. You can also use selectors to @query[query] the document for
+/// certain types of elements.
 ///
 /// Furthermore, you can pass a selector to several of Typst's built-in
-/// functions to configure their behaviour. One such example is the [outline]
-/// where it can be used to change which elements are listed within the outline.
+/// functions to configure their behaviour. One such example is the
+/// @outline[outline] where it can be used to change which elements are listed
+/// within the outline.
 ///
 /// Multiple selectors can be combined using the methods shown below. However,
 /// not all kinds of selectors are supported in all places, at the moment.
 ///
-/// # Example
+/// = Example <example>
 /// ```example
 /// #context query(
 ///   heading.where(level: 1)
@@ -84,6 +86,8 @@ pub enum Selector {
     /// Matches text elements through a regular expression.
     Regex(Regex),
     /// Matches elements with a specific capability.
+    ///
+    /// This is not exposed, but used internally.
     Can(TypeId),
     /// Matches if any of the subselectors match.
     Or(EcoVec<Self>),
@@ -93,6 +97,10 @@ pub enum Selector {
     Before { selector: Arc<Self>, end: Arc<Self>, inclusive: bool },
     /// Matches all matches of `selector` after `start`.
     After { selector: Arc<Self>, start: Arc<Self>, inclusive: bool },
+    /// Matches all matches of `selector` that are strictly within `ancestor`.
+    ///
+    /// This is not yet exposed, but used internally.
+    Within { selector: Arc<Self>, ancestor: Arc<Self> },
 }
 
 impl Selector {
@@ -139,7 +147,10 @@ impl Selector {
             }
             Self::Location(location) => target.location() == Some(*location),
             // Not supported here.
-            Self::Regex(_) | Self::Before { .. } | Self::After { .. } => false,
+            Self::Regex(_)
+            | Self::Before { .. }
+            | Self::After { .. }
+            | Self::Within { .. } => false,
         }
     }
 }
@@ -148,12 +159,15 @@ impl Selector {
 impl Selector {
     /// Turns a value into a selector. The following values are accepted:
     /// - An element function like a `heading` or `figure`.
+    /// - A @str[string] or @regex[regular expression].
     /// - A `{<label>}`.
+    /// - A @location.
     /// - A more complex selector like `{heading.where(level: 1)}`.
     #[func(constructor)]
     pub fn construct(
-        /// Can be an element function like a `heading` or `figure`, a `{<label>}`
-        /// or a more complex selector like `{heading.where(level: 1)}`.
+        /// Can be an element function like a `heading` or `figure`, a
+        /// `{<label>}` or a more complex selector like
+        /// `{heading.where(level: 1)}`.
         target: Selector,
     ) -> Selector {
         target
@@ -183,6 +197,9 @@ impl Selector {
 
     /// Returns a modified selector that will only match elements that occur
     /// before the first match of `end`.
+    ///
+    /// _Note:_ This selector is currently only supported with introspection
+    /// functions, not in show rules.
     #[func]
     pub fn before(
         self,
@@ -203,14 +220,16 @@ impl Selector {
 
     /// Returns a modified selector that will only match elements that occur
     /// after the first match of `start`.
+    ///
+    /// _Note:_ This selector is currently only supported with introspection
+    /// functions, not in show rules.
     #[func]
     pub fn after(
         self,
         /// The original selection will start at the first match of `start`.
         start: LocatableSelector,
-        ///  Whether `start` itself should match or not. This is only relevant
-        ///  if both selectors match the same type of element. Defaults to
-        ///  `{true}`.
+        /// Whether `start` itself should match or not. This is only relevant if
+        /// both selectors match the same type of element. Defaults to `{true}`.
         #[named]
         #[default(true)]
         inclusive: bool,
@@ -219,6 +238,61 @@ impl Selector {
             selector: Arc::new(self),
             start: Arc::new(start.0),
             inclusive,
+        }
+    }
+
+    /// Returns a modified selector that will only match elements that are
+    /// contained within any elements matching the `ancestor` selector.
+    ///
+    /// #example(
+    ///   title: "Finding strong elements in lists",
+    ///   ```
+    ///   *Strong emphasis* that does not count.
+    ///
+    ///   - An *important* word
+    ///   - Another *key* word
+    ///
+    ///   Strong elements in lists:
+    ///   #context {
+    ///     query(selector(strong).within(list))
+    ///       .map(it => it.body)
+    ///       .join[, ]
+    ///   }
+    ///   ```
+    /// )
+    ///
+    /// This can also be used in combination with @here to find all matches of a
+    /// selector within a @reference:context[context] expression. This can be
+    /// quite useful to have an introspection return results local to some
+    /// component you are building.
+    ///
+    /// #example(
+    ///   title: "Counting elements locally in a context block",
+    ///   ```
+    ///   #let count(sel, body) = context {
+    ///     let n = query(selector(sel).within(here())).len()
+    ///     [#body (#n matches)]
+    ///   }
+    ///
+    ///   - #count(emph)[Has _two_ matching _elements_]
+    ///   - #count(strong)[Has *one* matching element]
+    ///   ```
+    /// )
+    ///
+    /// _Note:_ This selector is currently only supported with introspection
+    /// functions, not in show rules.
+    #[func]
+    pub fn within(
+        self,
+        /// Only matches of `self` that are descendants of any element matching
+        /// this selector will be included in the output.
+        ///
+        /// An element is not considered its own ancestor.
+        ancestor: LocatableSelector,
+    ) -> Selector {
+        Selector::Within {
+            selector: Arc::new(self),
+            ancestor: Arc::new(ancestor.0),
         }
     }
 }
@@ -246,11 +320,15 @@ impl Repr for Selector {
             }
             Self::Label(label) => label.repr(),
             Self::Regex(regex) => regex.repr(),
-            Self::Can(cap) => eco_format!("{cap:?}"),
+            Self::Can(_) => eco_format!("selector(..)"),
             Self::Or(selectors) | Self::And(selectors) => {
                 let function = if matches!(self, Self::Or(_)) { "or" } else { "and" };
                 let pieces: Vec<_> = selectors.iter().map(Selector::repr).collect();
-                eco_format!("{}{}", function, repr::pretty_array_like(&pieces, false))
+                eco_format!(
+                    "selector.{}{}",
+                    function,
+                    repr::pretty_array_like(&pieces, false)
+                )
             }
             Self::Location(loc) => loc.repr(),
             Self::Before { selector, end: split, inclusive }
@@ -266,6 +344,9 @@ impl Repr for Selector {
                     inclusive_arg
                 )
             }
+            Self::Within { selector, ancestor } => {
+                eco_format!("{}.within({})", selector.repr(), ancestor.repr(),)
+            }
         }
     }
 }
@@ -274,7 +355,7 @@ cast! {
     type Selector,
     text: EcoString => Self::text(&text)?,
     func: Func => func
-        .element()
+        .to_element()
         .ok_or("only element functions can be used as selectors")?
         .select(),
     label: Label => Self::Label(label),
@@ -293,14 +374,18 @@ impl LocatableSelector {
     /// Resolve this selector into a location that is guaranteed to be unique.
     pub fn resolve_unique(
         &self,
-        introspector: Tracked<Introspector>,
+        engine: &mut Engine,
         context: Tracked<Context>,
-    ) -> HintedStrResult<Location> {
-        match &self.0 {
-            Selector::Location(loc) => Ok(*loc),
+        span: Span,
+    ) -> SourceResult<Location> {
+        match self.0.clone() {
+            Selector::Location(loc) => Ok(loc),
             other => {
-                context.introspect()?;
-                Ok(introspector.query_unique(other).map(|c| c.location().unwrap())?)
+                context.introspect().at(span)?;
+                engine
+                    .introspect(QueryUniqueIntrospection(other, span))
+                    .map(|c| c.location().unwrap())
+                    .at(span)
             }
         }
     }
@@ -354,6 +439,11 @@ impl FromValue for LocatableSelector {
                 Selector::Before { selector, end: split, .. }
                 | Selector::After { selector, start: split, .. } => {
                     for selector in [selector, split] {
+                        validate(selector)?;
+                    }
+                }
+                Selector::Within { selector, ancestor } => {
+                    for selector in [selector, ancestor] {
                         validate(selector)?;
                     }
                 }
@@ -433,6 +523,12 @@ impl FromValue for ShowableSelector {
                 | Selector::Before { .. }
                 | Selector::After { .. } => {
                     bail!("this selector cannot be used with show")
+                }
+                Selector::Within { .. } => {
+                    bail!(
+                        "this selector cannot currently be used with show";
+                        hint: "support for this is planned for the future";
+                    )
                 }
             }
             Ok(())

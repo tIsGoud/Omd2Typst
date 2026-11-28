@@ -1,11 +1,10 @@
-use ecow::EcoString;
 use roxmltree::ParsingOptions;
 use typst_syntax::Spanned;
 
-use crate::diag::{format_xml_like_error, At, FileError, SourceResult};
+use crate::diag::{LoadError, LoadedWithin, SourceResult, format_xml_like_error};
 use crate::engine::Engine;
-use crate::foundations::{dict, func, scope, Array, Dict, IntoValue, Str, Value};
-use crate::loading::{DataSource, Load, Readable};
+use crate::foundations::{Array, Dict, IntoValue, Str, Value, dict, func};
+use crate::loading::{DataSource, Load};
 
 /// Reads structured data from an XML file.
 ///
@@ -22,7 +21,7 @@ use crate::loading::{DataSource, Load, Readable};
 /// `content` tag contains one or more paragraphs, which are represented as `p`
 /// tags.
 ///
-/// # Example
+/// = Example <example>
 /// ```example
 /// #let find-child(elem, tag) = {
 ///   elem.children
@@ -55,35 +54,21 @@ use crate::loading::{DataSource, Load, Readable};
 ///   }
 /// }
 /// ```
-#[func(scope, title = "XML")]
+#[func(title = "XML")]
 pub fn xml(
     engine: &mut Engine,
-    /// A [path]($syntax/#paths) to an XML file or raw XML bytes.
+    /// A path to an XML file or raw XML bytes.
     source: Spanned<DataSource>,
 ) -> SourceResult<Value> {
-    let data = source.load(engine.world)?;
-    let text = data.as_str().map_err(FileError::from).at(source.span)?;
+    let loaded = source.load(engine.world)?;
+    let text = loaded.data.as_str().within(&loaded)?;
     let document = roxmltree::Document::parse_with_options(
         text,
         ParsingOptions { allow_dtd: true, ..Default::default() },
     )
     .map_err(format_xml_error)
-    .at(source.span)?;
+    .within(&loaded)?;
     Ok(convert_xml(document.root()))
-}
-
-#[scope]
-impl xml {
-    /// Reads structured data from an XML string/bytes.
-    #[func(title = "Decode XML")]
-    #[deprecated = "`xml.decode` is deprecated, directly pass bytes to `xml` instead"]
-    pub fn decode(
-        engine: &mut Engine,
-        /// XML data.
-        data: Spanned<Readable>,
-    ) -> SourceResult<Value> {
-        xml(engine, data.map(Readable::into_source))
-    }
 }
 
 /// Convert an XML node to a Typst value.
@@ -97,6 +82,7 @@ fn convert_xml(node: roxmltree::Node) -> Value {
         return Value::Array(children);
     }
 
+    let namespace = node.tag_name().namespace();
     let tag: Str = node.tag_name().name().into();
     let attrs: Dict = node
         .attributes()
@@ -104,6 +90,7 @@ fn convert_xml(node: roxmltree::Node) -> Value {
         .collect();
 
     Value::Dict(dict! {
+        "namespace" => namespace,
         "tag" => tag,
         "attrs" => attrs,
         "children" => children,
@@ -111,6 +98,6 @@ fn convert_xml(node: roxmltree::Node) -> Value {
 }
 
 /// Format the user-facing XML error message.
-fn format_xml_error(error: roxmltree::Error) -> EcoString {
+fn format_xml_error(error: roxmltree::Error) -> LoadError {
     format_xml_like_error("XML", error)
 }

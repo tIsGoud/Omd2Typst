@@ -1,28 +1,26 @@
 use std::fmt::{self, Debug, Formatter};
 use std::sync::Arc;
 
-use ecow::{eco_format, EcoString};
+use ecow::{EcoString, eco_format};
 use typst_syntax::FileId;
 
-use crate::diag::{bail, DeprecationSink, StrResult};
-use crate::foundations::{repr, ty, Content, Scope, Value};
+use crate::diag::{StrResult, WarningSink, bail};
+use crate::foundations::{Content, Repr, Scope, Value, ty};
 
-/// An module of definitions.
+/// A collection of variables and functions that are commonly related to a
+/// single theme.
 ///
-/// A module
+/// A module can
 /// - be built-in
-/// - stem from a [file import]($scripting/#modules)
-/// - stem from a [package import]($scripting/#packages) (and thus indirectly
-///   its entrypoint file)
-/// - result from a call to the [plugin]($plugin) function
+/// - stem from a @reference:scripting:modules[file import]
+/// - stem from a @reference:scripting:packages[package import] (and thus
+///   indirectly its entrypoint file)
+/// - result from a call to the @plugin[plugin] function
 ///
-/// You can access definitions from the module using [field access
-/// notation]($scripting/#fields) and interact with it using the [import and
-/// include syntaxes]($scripting/#modules). Alternatively, it is possible to
-/// convert a module to a dictionary, and therefore access its contents
-/// dynamically, using the [dictionary constructor]($dictionary/#constructor).
+/// You can access definitions from the module using
+/// @reference:scripting:fields[field access notation] and interact with it
+/// using the @reference:scripting:modules[import and include syntaxes].
 ///
-/// # Example
 /// ```example
 /// <<< #import "utils.typ"
 /// <<< #utils.add(2, 5)
@@ -33,19 +31,31 @@ use crate::foundations::{repr, ty, Content, Scope, Value};
 /// >>>
 /// >>> #(-3)
 /// ```
+///
+/// You can check whether a definition is present in a module using the `{in}`
+/// operator, with a string on the left-hand side. This can be useful to
+/// @std:conditional-access[conditionally access] definitions in a module.
+///
+/// ```example
+/// #("table" in std) \
+/// #("nope" in std)
+/// ```
+///
+/// Alternatively, it is possible to convert a module to a dictionary, and
+/// therefore access its contents dynamically, using the
+/// @dictionary.constructor[dictionary constructor].
 #[ty(cast)]
 #[derive(Clone, Hash)]
-#[allow(clippy::derived_hash_with_manual_eq)]
 pub struct Module {
     /// The module's name.
     name: Option<EcoString>,
     /// The reference-counted inner fields.
-    inner: Arc<Repr>,
+    inner: Arc<ModuleInner>,
 }
 
-/// The internal representation.
+/// The internal representation of a [`Module`].
 #[derive(Debug, Clone, Hash)]
-struct Repr {
+struct ModuleInner {
     /// The top-level definitions that were bound in this module.
     scope: Scope,
     /// The module's layoutable contents.
@@ -59,7 +69,11 @@ impl Module {
     pub fn new(name: impl Into<EcoString>, scope: Scope) -> Self {
         Self {
             name: Some(name.into()),
-            inner: Arc::new(Repr { scope, content: Content::empty(), file_id: None }),
+            inner: Arc::new(ModuleInner {
+                scope,
+                content: Content::empty(),
+                file_id: None,
+            }),
         }
     }
 
@@ -67,7 +81,11 @@ impl Module {
     pub fn anonymous(scope: Scope) -> Self {
         Self {
             name: None,
-            inner: Arc::new(Repr { scope, content: Content::empty(), file_id: None }),
+            inner: Arc::new(ModuleInner {
+                scope,
+                content: Content::empty(),
+                file_id: None,
+            }),
         }
     }
 
@@ -118,7 +136,7 @@ impl Module {
     }
 
     /// Try to access a definition in the module.
-    pub fn field(&self, field: &str, sink: impl DeprecationSink) -> StrResult<&Value> {
+    pub fn field(&self, field: &str, sink: impl WarningSink) -> StrResult<&Value> {
         match self.scope().get(field) {
             Some(binding) => Ok(binding.read_checked(sink)),
             None => match &self.name {
@@ -147,7 +165,7 @@ impl Debug for Module {
     }
 }
 
-impl repr::Repr for Module {
+impl Repr for Module {
     fn repr(&self) -> EcoString {
         match &self.name {
             Some(module) => eco_format!("<module {module}>"),

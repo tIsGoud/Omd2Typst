@@ -5,12 +5,12 @@ use std::cmp::Ordering;
 use std::fmt::{self, Debug, Display, Formatter};
 use std::sync::LazyLock;
 
-use ecow::{eco_format, EcoString};
-use typst_utils::Static;
+use ecow::{EcoString, eco_format};
+use typst_utils::{DefSite, Static};
 
-use crate::diag::{bail, DeprecationSink, StrResult};
+use crate::diag::{StrResult, WarningSink, bail};
 use crate::foundations::{
-    cast, func, AutoValue, Func, NativeFuncData, NoneValue, Repr, Scope, Value,
+    AutoValue, Func, NativeFuncData, NoneValue, Repr, Scope, Value, cast, func,
 };
 
 /// Describes a kind of value.
@@ -20,13 +20,13 @@ use crate::foundations::{
 /// shapes, and more. Typst categorizes these into clearly defined _types_ and
 /// tells you where it expects which type of value.
 ///
-/// Apart from basic types for numeric values and [typical]($int)
-/// [types]($float) [known]($str) [from]($array) [programming]($dictionary)
-/// languages, Typst provides a special type for [_content._]($content) A value
-/// of this type can hold anything that you can enter into your document: Text,
-/// elements like headings and shapes, and style information.
+/// Apart from basic types for numeric values and @int[typical] @float[types]
+/// @str[known] @array[from] @dictionary[programming] languages, Typst provides
+/// a special type for @content[_content._] A value of this type can hold
+/// anything that you can enter into your document: Text, elements like headings
+/// and shapes, and style information.
 ///
-/// # Example
+/// = Example <example>
 /// ```example
 /// #let x = 10
 /// #if type(x) == int [
@@ -39,21 +39,27 @@ use crate::foundations::{
 /// #type(image("glacier.jpg")).
 /// ```
 ///
-/// The type of `10` is `int`. Now, what is the type of `int` or even `type`?
+/// The type of `{10}` is `int`. Now, what is the type of `int` or even `type`?
+///
 /// ```example
 /// #type(int) \
 /// #type(type)
 /// ```
 ///
-/// # Compatibility
-/// In Typst 0.7 and lower, the `type` function returned a string instead of a
-/// type. Compatibility with the old way will remain until Typst 0.14 to give
-/// package authors time to upgrade.
+/// Unlike other types like `int`, @none[none] and @auto[auto] do not have a
+/// name representing them. To test if a value is one of these, compare your
+/// value to them directly, e.g:
 ///
-/// - Checks like `{int == "integer"}` evaluate to `{true}`
-/// - Adding/joining a type and string will yield a string
-/// - The `{in}` operator on a type and a dictionary will evaluate to `{true}`
-///   if the dictionary has a string key matching the type's name
+/// ```example
+/// #let val = none
+/// #if val == none [
+///   Yep, it's none.
+/// ]
+/// ```
+///
+/// Note that `type` will return @content for all document elements. To
+/// programmatically determine which kind of content you are dealing with, see
+/// @content.func.
 #[ty(scope, cast)]
 #[derive(Copy, Clone, Eq, PartialEq, Hash)]
 pub struct Type(Static<NativeTypeData>);
@@ -84,6 +90,11 @@ impl Type {
         self.0.docs
     }
 
+    /// Where the function is type in the Rust source code.
+    pub fn def_site(&self) -> DefSite {
+        self.0.def_site
+    }
+
     /// Search keywords for the type.
     pub fn keywords(&self) -> &'static [&'static str] {
         self.0.keywords
@@ -107,20 +118,12 @@ impl Type {
     pub fn field(
         &self,
         field: &str,
-        sink: impl DeprecationSink,
+        sink: impl WarningSink,
     ) -> StrResult<&'static Value> {
         match self.scope().get(field) {
             Some(binding) => Ok(binding.read_checked(sink)),
             None => bail!("type {self} does not contain field `{field}`"),
         }
-    }
-}
-
-// Type compatibility.
-impl Type {
-    /// The type's backward-compatible name.
-    pub fn compat_name(&self) -> &str {
-        self.long_name()
     }
 }
 
@@ -210,6 +213,8 @@ pub struct NativeTypeData {
     pub title: &'static str,
     /// The documentation for this type as a string.
     pub docs: &'static str,
+    /// Where the function is defined in the source code.
+    pub def_site: DefSite,
     /// A list of alternate search terms for this type.
     pub keywords: &'static [&'static str],
     /// The constructor for this type.

@@ -1,12 +1,12 @@
 use ecow::EcoString;
-use typst_utils::{Numeric, Scalar};
+use typst_utils::Numeric;
 
 use crate::diag::{HintedStrResult, SourceResult};
 use crate::foundations::{
-    cast, dict, func, scope, ty, Args, Cast, Dict, Fold, FromValue, NoneValue, Repr,
-    Resolve, Smart, StyleChain, Value,
+    Args, Cast, Dict, Fold, FromValue, NoneValue, Repr, Resolve, Smart, StyleChain,
+    Value, cast, dict, func, scope, ty,
 };
-use crate::layout::{Abs, Length};
+use crate::layout::{Abs, Length, Ratio};
 use crate::visualize::{Color, Gradient, Paint, Tiling};
 
 /// Defines how to draw a line.
@@ -15,7 +15,7 @@ use crate::visualize::{Color, Gradient, Paint, Tiling};
 /// _cap,_ a line _join,_ a _miter limit,_ and a _dash_ pattern. All of these
 /// values are optional and have sensible defaults.
 ///
-/// # Example
+/// = Example <example>
 /// ```example
 /// #set line(length: 100%)
 /// #stack(
@@ -27,7 +27,7 @@ use crate::visualize::{Color, Gradient, Paint, Tiling};
 /// )
 /// ```
 ///
-/// # Simple strokes
+/// = Simple strokes <simple-strokes>
 /// You can create a simple solid stroke from a color, a thickness, or a
 /// combination of the two. Specifically, wherever a stroke is expected you can
 /// pass any of the following values:
@@ -39,11 +39,12 @@ use crate::visualize::{Color, Gradient, Paint, Tiling};
 /// - A stroke combined from color and thickness using the `+` operator as in
 ///   `{2pt + red}`.
 ///
-/// For full control, you can also provide a [dictionary] or a `{stroke}` object
-/// to any function that expects a stroke. The dictionary's keys may include any
-/// of the parameters for the constructor function, shown below.
+/// For full control, you can also provide a @dictionary[dictionary] or a
+/// `{stroke}` object to any function that expects a stroke. The dictionary's
+/// keys may include any of the parameters for the constructor function, shown
+/// below.
 ///
-/// # Fields
+/// = Fields <fields>
 /// On a stroke object, you can access any of the fields listed in the
 /// constructor function. For example, `{(2pt + blue).thickness}` is `{2pt}`.
 /// Meanwhile, `{stroke(red).cap}` is `{auto}` because it's unspecified. Fields
@@ -62,7 +63,7 @@ pub struct Stroke<T: Numeric = Length> {
     /// The stroke's line dash pattern.
     pub dash: Smart<Option<DashPattern<T>>>,
     /// The miter limit.
-    pub miter_limit: Smart<Scalar>,
+    pub miter_limit: Smart<Ratio>,
 }
 
 impl Stroke {
@@ -113,47 +114,84 @@ impl Stroke {
 
         /// How the ends of the stroke are rendered.
         ///
-        /// If set to `{auto}`, the value is inherited, defaulting to `{"butt"}`.
+        /// If set to `{auto}`, the value is inherited, defaulting to
+        /// `{"butt"}`.
         #[external]
         cap: Smart<LineCap>,
 
         /// How sharp turns are rendered.
         ///
-        /// If set to `{auto}`, the value is inherited, defaulting to `{"miter"}`.
+        /// If set to `{auto}`, the value is inherited, defaulting to
+        /// `{"miter"}`.
         #[external]
         join: Smart<LineJoin>,
 
         /// The dash pattern to use. This can be:
         ///
-        /// - One of the predefined patterns:
-        ///   - `{"solid"}` or `{none}`
-        ///   - `{"dotted"}`
-        ///   - `{"densely-dotted"}`
-        ///   - `{"loosely-dotted"}`
-        ///   - `{"dashed"}`
-        ///   - `{"densely-dashed"}`
-        ///   - `{"loosely-dashed"}`
-        ///   - `{"dash-dotted"}`
-        ///   - `{"densely-dash-dotted"}`
-        ///   - `{"loosely-dash-dotted"}`
-        /// - An [array] with alternating lengths for dashes and gaps. You can
-        ///   also use the string `{"dot"}` for a length equal to the line
+        /// - One of the predefined patterns listed below.
+        /// - `{none}`, as an equivalent to the predefined pattern `{"solid"}`.
+        /// - An @array[array] with alternating lengths for dashes and gaps. You
+        ///   can also use the string `{"dot"}` for a length equal to the line
         ///   thickness.
-        /// - A [dictionary] with the keys `array` (same as the array above),
-        ///   and `phase` (of type [length]), which defines where in the pattern
-        ///   to start drawing.
+        /// - A @dictionary[dictionary] with the keys `array` (same as the array
+        ///   above), and `phase` (of type @length[length]), which defines where
+        ///   in the pattern to start drawing.
         ///
         /// If set to `{auto}`, the value is inherited, defaulting to `{none}`.
         ///
-        /// ```example
-        /// #set line(length: 100%, stroke: 2pt)
-        /// #stack(
-        ///   spacing: 1em,
-        ///   line(stroke: (dash: "dashed")),
-        ///   line(stroke: (dash: (10pt, 5pt, "dot", 5pt))),
-        ///   line(stroke: (dash: (array: (10pt, 5pt, "dot", 5pt), phase: 10pt))),
+        /// #example(
+        ///   title: "Usage",
+        ///   ```
+        ///   #set line(length: 100%, stroke: 2pt)
+        ///   #stack(
+        ///     spacing: 1em,
+        ///     line(stroke: (dash: "dashed")),
+        ///     line(stroke: (dash: (10pt, 5pt, "dot", 5pt))),
+        ///     line(stroke: (dash: (array: (10pt, 5pt, "dot", 5pt), phase: 10pt))),
+        ///   )
+        ///   ```
         /// )
-        /// ```
+        ///
+        /// #example(
+        ///   title: "Predefined patterns",
+        ///   ```
+        ///   #set page(width: auto, height: auto)
+        ///
+        ///   #let patterns = (
+        ///     ("dotted", "dashed", "dash-dotted").map(d => (
+        ///       "loosely-" + d,
+        ///       d,
+        ///       "densely-" + d,
+        ///     ))
+        ///   ).flatten()
+        ///
+        ///
+        ///   #let display(dash) = {
+        ///     set par(spacing: 0.3em)
+        ///
+        ///     show "loosely": set text(eastern.darken(17%))
+        ///     show "densely": set text(purple)
+        ///
+        ///     let derived = dash.starts-with("loosely-") or dash.starts-with("densely-")
+        ///     if derived { dash } else { strong(dash) }
+        ///
+        ///     rect(
+        ///       line(stroke: (dash: dash), length: 100%),
+        ///       stroke: none,
+        ///       fill: yellow.transparentize(80%),
+        ///     )
+        ///   }
+        ///
+        ///   #table(
+        ///     columns: 3,
+        ///     stroke: none,
+        ///     align: (left, center, left),
+        ///
+        ///     table.cell(colspan: 3, align: center, display("solid")),
+        ///     ..patterns.map(display),
+        ///   )
+        ///   ```
+        /// )
         #[external]
         dash: Smart<Option<DashPattern>>,
 
@@ -200,7 +238,7 @@ impl Stroke {
         let cap = take::<LineCap>(args, "cap")?;
         let join = take::<LineJoin>(args, "join")?;
         let dash = take::<Option<DashPattern>>(args, "dash")?;
-        let miter_limit = take::<f64>(args, "miter-limit")?.map(Scalar::new);
+        let miter_limit = take::<f64>(args, "miter-limit")?.map(Ratio::new);
 
         Ok(Self { paint, thickness, cap, join, dash, miter_limit })
     }
@@ -397,7 +435,7 @@ cast! {
             cap,
             join,
             dash,
-            miter_limit: miter_limit.map(Scalar::new),
+            miter_limit: miter_limit.map(Ratio::new),
         }
     },
 }
@@ -499,15 +537,25 @@ cast! {
     DashPattern,
     self => dict! { "array" => self.array, "phase" => self.phase }.into_value(),
 
+    /// `{()}`
     "solid" => Vec::new().into(),
+    /// `{("dot", 2pt)}`
     "dotted" => vec![DashLength::LineWidth, Abs::pt(2.0).into()].into(),
+    /// `{("dot", 1pt)}`
     "densely-dotted" => vec![DashLength::LineWidth, Abs::pt(1.0).into()].into(),
+    /// `{("dot", 4pt)}`
     "loosely-dotted" => vec![DashLength::LineWidth, Abs::pt(4.0).into()].into(),
+    /// `{(3pt, 3pt)}`
     "dashed" => vec![Abs::pt(3.0).into(), Abs::pt(3.0).into()].into(),
+    /// `{(3pt, 2pt)}`
     "densely-dashed" => vec![Abs::pt(3.0).into(), Abs::pt(2.0).into()].into(),
+    /// `{(3pt, 6pt)}`
     "loosely-dashed" => vec![Abs::pt(3.0).into(), Abs::pt(6.0).into()].into(),
+    /// `{(3pt, 2pt, "dot", 2pt)}`
     "dash-dotted" => vec![Abs::pt(3.0).into(), Abs::pt(2.0).into(), DashLength::LineWidth, Abs::pt(2.0).into()].into(),
+    /// `{(3pt, 1pt, "dot", 1pt)}`
     "densely-dash-dotted" => vec![Abs::pt(3.0).into(), Abs::pt(1.0).into(), DashLength::LineWidth, Abs::pt(1.0).into()].into(),
+    /// `{(3pt, 4pt, "dot", 4pt)}`
     "loosely-dash-dotted" => vec![Abs::pt(3.0).into(), Abs::pt(4.0).into(), DashLength::LineWidth, Abs::pt(4.0).into()].into(),
 
     array: Vec<DashLength> => Self { array, phase: Length::zero() },
@@ -589,7 +637,7 @@ pub struct FixedStroke {
     /// The stroke's line dash pattern.
     pub dash: Option<DashPattern<Abs, Abs>>,
     /// The miter limit. Defaults to 4.0, same as `tiny-skia`.
-    pub miter_limit: Scalar,
+    pub miter_limit: Ratio,
 }
 
 impl FixedStroke {
@@ -611,7 +659,7 @@ impl Default for FixedStroke {
             cap: LineCap::Butt,
             join: LineJoin::Miter,
             dash: None,
-            miter_limit: Scalar::new(4.0),
+            miter_limit: Ratio::new(4.0),
         }
     }
 }

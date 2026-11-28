@@ -4,48 +4,57 @@ pub mod color;
 
 mod book;
 mod exceptions;
+mod info;
+mod metrics;
+mod tag;
 mod variant;
+mod variations;
 
-pub use self::book::{Coverage, FontBook, FontFlags, FontInfo};
+pub use self::book::FontBook;
+pub use self::info::{Coverage, FontFlags, FontInfo};
+pub use self::metrics::{
+    FontMetrics, LineMetrics, MathConstants, ScriptMetrics, TextEdgeBounds,
+    VerticalFontMetric,
+};
+pub use self::tag::Tag;
 pub use self::variant::{FontStretch, FontStyle, FontVariant, FontWeight};
+pub use self::variations::{AxisValue, FontAxis, FontVariations, StandardAxes};
 
 use std::cell::OnceCell;
 use std::fmt::{self, Debug, Formatter};
 use std::hash::{Hash, Hasher};
+use std::ops::Deref;
 use std::sync::Arc;
 
-use ttf_parser::GlyphId;
+use ttf_parser::{GlyphId, name_id};
 
-use self::book::find_name;
-use crate::foundations::{Bytes, Cast};
-use crate::layout::{Abs, Em, Frame};
+use self::exceptions::find_exception;
+use self::info::find_name;
+use crate::foundations::Bytes;
+use crate::layout::{Abs, Em};
 use crate::text::{BottomEdge, TopEdge};
 
 /// An OpenType font.
 ///
 /// Values of this type are cheap to clone and hash.
 #[derive(Clone)]
-pub struct Font(Arc<Repr>);
+pub struct Font(Arc<FontInner>);
 
-/// The internal representation of a font.
-struct Repr {
+/// The internal representation of a [`Font`].
+struct FontInner {
     /// The font's index in the buffer.
     index: u32,
     /// Metadata about the font.
     info: FontInfo,
-    /// The font's metrics.
-    metrics: FontMetrics,
+    // NOTE: `ttf` references `data`, so it's important for `data` to be
+    // dropped after `ttf` or `ttf` will be left dangling while the data is
+    // dropped. Fields are dropped in declaration order, so `data` needs to be
+    // declared after `ttf`.
     /// The underlying ttf-parser face.
     ttf: ttf_parser::Face<'static>,
-    /// The underlying rustybuzz face.
-    rusty: rustybuzz::Face<'static>,
-    // NOTE: `ttf` and `rusty` reference `data`, so it's important for `data`
-    // to be dropped after them or they will be left dangling while they're
-    // dropped. Fields are dropped in declaration order, so `data` needs to be
-    // declared after `ttf` and `rusty`.
     /// The raw font data, possibly shared with other fonts from the same
-    /// collection. The vector's allocation must not move, because `ttf` points
-    /// into it using unsafe code.
+    /// collection. The vector's allocation must not move, because `ttf`
+    /// points into it using unsafe code.
     data: Bytes,
 }
 
@@ -62,11 +71,9 @@ impl Font {
             unsafe { std::slice::from_raw_parts(data.as_ptr(), data.len()) };
 
         let ttf = ttf_parser::Face::parse(slice, index).ok()?;
-        let rusty = rustybuzz::Face::from_slice(slice, index)?;
-        let metrics = FontMetrics::from_ttf(&ttf);
         let info = FontInfo::from_ttf(&ttf)?;
 
-        Some(Self(Arc::new(Repr { data, index, info, metrics, ttf, rusty })))
+        Some(Self(Arc::new(FontInner { index, info, ttf, data })))
     }
 
     /// Parse all fonts in the given data.
@@ -90,9 +97,116 @@ impl Font {
         &self.0.info
     }
 
+    /// Determine the font's PostScript name.
+    pub fn post_script_name(&self) -> Option<String> {
+        find_name(&self.0.ttf, name_id::POST_SCRIPT_NAME)
+    }
+
+    /// Instantiates the font with specific text properties. The resulting
+    /// type allows access to methods that depend on coordinates.
+    #[comemo::memoize]
+    pub fn instantiate(
+        self,
+        variant: FontVariant,
+        size: Abs,
+        custom: &FontVariations,
+    ) -> FontInstance {
+        let axes = &self.info().axes;
+        let automatic = FontVariations::resolve(axes, variant, size);
+        let full = automatic.chain(custom).normalized();
+        self.instantiate_impl(full)
+    }
+
+    /// Instantiates the font with specific variation coordinates. The resulting
+    /// type allows access to methods that depend on coordinates.
+    #[comemo::memoize]
+    fn instantiate_impl(self, variations: FontVariations) -> FontInstance {
+        let data = self.data();
+        let index = self.index();
+
+        // Safety: See `Self::new`.
+        let slice: &'static [u8] =
+            unsafe { std::slice::from_raw_parts(data.as_ptr(), data.len()) };
+
+        let mut rusty = rustybuzz::Face::from_slice(slice, index).unwrap();
+        for &(tag, value) in &variations.0 {
+            rusty.set_variation(tag.into(), value.0);
+        }
+
+        let metrics = FontMetrics::from_ttf(&rusty);
+
+        FontInstance(Arc::new(FontInstanceInner {
+            metrics,
+            rusty,
+            variations,
+            font: self,
+        }))
+    }
+}
+
+impl Debug for Font {
+    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
+        write!(f, "Font({}, {:?})", self.info().family, self.info().variant)
+    }
+}
+
+impl Hash for Font {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.0.data.hash(state);
+        self.0.index.hash(state);
+    }
+}
+
+impl Eq for Font {}
+
+impl PartialEq for Font {
+    fn eq(&self, other: &Self) -> bool {
+        self.0.data == other.0.data && self.0.index == other.0.index
+    }
+}
+
+/// An OpenType font with fixed variation coordinates.
+///
+/// Values of this type are cheap to clone and hash.
+#[derive(Clone)]
+pub struct FontInstance(Arc<FontInstanceInner>);
+
+/// The internal representation of a [`FontInstance`].
+struct FontInstanceInner {
+    /// The font's metrics.
+    metrics: FontMetrics,
+    // NOTE: `rusty` references `font`, so it's important for `font` to be
+    // dropped after `rusty` or `rusty` will be left dangling while the font is
+    // dropped. Fields are dropped in declaration order, so `font` needs to be
+    // declared after `rusty`.
+    /// The underlying rustybuzz face.
+    rusty: rustybuzz::Face<'static>,
+    // The instance's variation coordinates.
+    variations: FontVariations,
+    /// The underlying font.
+    font: Font,
+}
+
+impl FontInstance {
+    /// The instance's underlying font.
+    pub fn font(&self) -> &Font {
+        &self.0.font
+    }
+
+    /// The instance's variation coordinates.
+    pub fn variations(&self) -> &FontVariations {
+        &self.0.variations
+    }
+
     /// The font's metrics.
     pub fn metrics(&self) -> &FontMetrics {
         &self.0.metrics
+    }
+
+    /// The font's math constants.
+    #[inline]
+    pub fn math(&self) -> &MathConstants {
+        self.0.metrics.math.get_or_init(|| MathConstants::new(self))
     }
 
     /// The number of font units per one em.
@@ -106,23 +220,26 @@ impl Font {
     }
 
     /// Look up the horizontal advance width of a glyph.
-    pub fn advance(&self, glyph: u16) -> Option<Em> {
+    pub fn x_advance(&self, glyph: u16) -> Option<Em> {
         self.0
-            .ttf
+            .rusty
             .glyph_hor_advance(GlyphId(glyph))
             .map(|units| self.to_em(units))
     }
 
-    /// Lookup a name by id.
-    pub fn find_name(&self, id: u16) -> Option<String> {
-        find_name(&self.0.ttf, id)
+    /// Look up the vertical advance width of a glyph.
+    pub fn y_advance(&self, glyph: u16) -> Option<Em> {
+        self.0
+            .rusty
+            .glyph_ver_advance(GlyphId(glyph))
+            .map(|units| self.to_em(units))
     }
 
     /// A reference to the underlying `ttf-parser` face.
     pub fn ttf(&self) -> &ttf_parser::Face<'_> {
         // We can't implement Deref because that would leak the
         // internal 'static lifetime.
-        &self.0.ttf
+        &self.0.rusty
     }
 
     /// A reference to the underlying `rustybuzz` face.
@@ -175,136 +292,34 @@ impl Font {
     }
 }
 
-impl Hash for Font {
-    fn hash<H: Hasher>(&self, state: &mut H) {
-        self.0.data.hash(state);
-        self.0.index.hash(state);
+impl Deref for FontInstance {
+    type Target = Font;
+
+    fn deref(&self) -> &Self::Target {
+        self.font()
     }
 }
 
-impl Debug for Font {
+impl Debug for FontInstance {
     fn fmt(&self, f: &mut Formatter) -> fmt::Result {
-        write!(f, "Font({}, {:?})", self.info().family, self.info().variant)
+        f.debug_struct("FontInstance")
+            .field("font", self.font())
+            .field("variations", self.variations())
+            .finish()
     }
 }
 
-impl Eq for Font {}
+impl Hash for FontInstance {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.0.font.hash(state);
+        self.0.variations.hash(state);
+    }
+}
 
-impl PartialEq for Font {
+impl Eq for FontInstance {}
+
+impl PartialEq for FontInstance {
     fn eq(&self, other: &Self) -> bool {
-        self.0.data == other.0.data && self.0.index == other.0.index
+        self.0.font == other.0.font && self.0.variations == other.0.variations
     }
-}
-
-/// Metrics of a font.
-#[derive(Debug, Copy, Clone)]
-pub struct FontMetrics {
-    /// How many font units represent one em unit.
-    pub units_per_em: f64,
-    /// The distance from the baseline to the typographic ascender.
-    pub ascender: Em,
-    /// The approximate height of uppercase letters.
-    pub cap_height: Em,
-    /// The approximate height of non-ascending lowercase letters.
-    pub x_height: Em,
-    /// The distance from the baseline to the typographic descender.
-    pub descender: Em,
-    /// Recommended metrics for a strikethrough line.
-    pub strikethrough: LineMetrics,
-    /// Recommended metrics for an underline.
-    pub underline: LineMetrics,
-    /// Recommended metrics for an overline.
-    pub overline: LineMetrics,
-}
-
-impl FontMetrics {
-    /// Extract the font's metrics.
-    pub fn from_ttf(ttf: &ttf_parser::Face) -> Self {
-        let units_per_em = f64::from(ttf.units_per_em());
-        let to_em = |units| Em::from_units(units, units_per_em);
-
-        let ascender = to_em(ttf.typographic_ascender().unwrap_or(ttf.ascender()));
-        let cap_height = ttf.capital_height().filter(|&h| h > 0).map_or(ascender, to_em);
-        let x_height = ttf.x_height().filter(|&h| h > 0).map_or(ascender, to_em);
-        let descender = to_em(ttf.typographic_descender().unwrap_or(ttf.descender()));
-        let strikeout = ttf.strikeout_metrics();
-        let underline = ttf.underline_metrics();
-
-        let strikethrough = LineMetrics {
-            position: strikeout.map_or(Em::new(0.25), |s| to_em(s.position)),
-            thickness: strikeout
-                .or(underline)
-                .map_or(Em::new(0.06), |s| to_em(s.thickness)),
-        };
-
-        let underline = LineMetrics {
-            position: underline.map_or(Em::new(-0.2), |s| to_em(s.position)),
-            thickness: underline
-                .or(strikeout)
-                .map_or(Em::new(0.06), |s| to_em(s.thickness)),
-        };
-
-        let overline = LineMetrics {
-            position: cap_height + Em::new(0.1),
-            thickness: underline.thickness,
-        };
-
-        Self {
-            units_per_em,
-            ascender,
-            cap_height,
-            x_height,
-            descender,
-            strikethrough,
-            underline,
-            overline,
-        }
-    }
-
-    /// Look up a vertical metric.
-    pub fn vertical(&self, metric: VerticalFontMetric) -> Em {
-        match metric {
-            VerticalFontMetric::Ascender => self.ascender,
-            VerticalFontMetric::CapHeight => self.cap_height,
-            VerticalFontMetric::XHeight => self.x_height,
-            VerticalFontMetric::Baseline => Em::zero(),
-            VerticalFontMetric::Descender => self.descender,
-        }
-    }
-}
-
-/// Metrics for a decorative line.
-#[derive(Debug, Copy, Clone)]
-pub struct LineMetrics {
-    /// The vertical offset of the line from the baseline. Positive goes
-    /// upwards, negative downwards.
-    pub position: Em,
-    /// The thickness of the line.
-    pub thickness: Em,
-}
-
-/// Identifies a vertical metric of a font.
-#[derive(Debug, Copy, Clone, Eq, PartialEq, Hash, Cast)]
-pub enum VerticalFontMetric {
-    /// The font's ascender, which typically exceeds the height of all glyphs.
-    Ascender,
-    /// The approximate height of uppercase letters.
-    CapHeight,
-    /// The approximate height of non-ascending lowercase letters.
-    XHeight,
-    /// The baseline on which the letters rest.
-    Baseline,
-    /// The font's ascender, which typically exceeds the depth of all glyphs.
-    Descender,
-}
-
-/// Defines how to resolve a `Bounds` text edge.
-#[derive(Debug, Copy, Clone)]
-pub enum TextEdgeBounds<'a> {
-    /// Set the bounds to zero.
-    Zero,
-    /// Use the bounding box of the given glyph for the bounds.
-    Glyph(u16),
-    /// Use the dimension of the given frame for the bounds.
-    Frame(&'a Frame),
 }

@@ -1,12 +1,10 @@
-use crate::diag::SourceResult;
-use crate::engine::Engine;
-use crate::foundations::{elem, Content, NativeElement, Packed, Show, StyleChain};
-use crate::layout::{Abs, Angle, Axes, BlockElem, Length, Rel};
+use crate::foundations::elem;
+use crate::layout::{Abs, Angle, Axes, Length, Rel};
 use crate::visualize::Stroke;
 
 /// A line from one point to another.
 ///
-/// # Example
+/// = Example <example>
 /// ```example
 /// #set page(height: 100pt)
 ///
@@ -17,20 +15,17 @@ use crate::visualize::Stroke;
 ///   stroke: 2pt + maroon,
 /// )
 /// ```
-#[elem(Show)]
+#[elem]
 pub struct LineElem {
     /// The start point of the line.
     ///
     /// Must be an array of exactly two relative lengths.
-    #[resolve]
     pub start: Axes<Rel<Length>>,
 
     /// The point where the line ends.
-    #[resolve]
     pub end: Option<Axes<Rel<Length>>>,
 
     /// The line's length. This is only respected if `end` is `{none}`.
-    #[resolve]
     #[default(Abs::pt(30.0).into())]
     pub length: Rel<Length>,
 
@@ -38,7 +33,7 @@ pub struct LineElem {
     /// respected if `end` is `{none}`.
     pub angle: Angle,
 
-    /// How to [stroke] the line.
+    /// How to @stroke[stroke] the line.
     ///
     /// ```example
     /// #set line(length: 100%)
@@ -50,15 +45,6 @@ pub struct LineElem {
     ///   line(stroke: (paint: blue, thickness: 1pt, dash: ("dot", 2pt, 4pt, 2pt))),
     /// )
     /// ```
-    #[resolve]
     #[fold]
     pub stroke: Stroke,
-}
-
-impl Show for Packed<LineElem> {
-    fn show(&self, engine: &mut Engine, _: StyleChain) -> SourceResult<Content> {
-        Ok(BlockElem::single_layouter(self.clone(), engine.routines.layout_line)
-            .pack()
-            .spanned(self.span()))
-    }
 }

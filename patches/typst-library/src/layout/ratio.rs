@@ -4,19 +4,61 @@ use std::ops::{Add, Div, Mul, Neg};
 use ecow::EcoString;
 use typst_utils::{Numeric, Scalar};
 
-use crate::foundations::{repr, ty, Repr};
+use crate::foundations::{Repr, repr, ty};
 
 /// A ratio of a whole.
 ///
-/// Written as a number, followed by a percent sign.
+/// A ratio is written as a number, followed by a percent sign. Ratios most
+/// often appear as part of a @relative[relative length], to specify the size of
+/// some layout element relative to the page or some container.
 ///
-/// # Example
 /// ```example
-/// #set align(center)
-/// #scale(x: 150%)[
-///   Scaled apart.
-/// ]
+/// #rect(width: 25%)
 /// ```
+///
+/// However, they can also describe any other property that is relative to some
+/// base, e.g. an amount of @scale.x[horizontal scaling] or the
+/// @math.lr.size[height of parentheses] relative to the height of the content
+/// they enclose.
+///
+/// = Scripting <scripting>
+/// Within your own code, you can use ratios as you like. You can multiply them
+/// with various other types as shown below:
+///
+/// #docs-table(
+///   table.header[Multiply by][Example][Result],
+///
+///   [@ratio],
+///   [`{27% * 10%}`],
+///   [`{2.7%}`],
+///
+///   [@length],
+///   [`{27% * 100pt}`],
+///   [`{27pt}`],
+///
+///   [@relative],
+///   [`{27% * (10% + 100pt)}`],
+///   [`{2.7% + 27pt}`],
+///
+///   [@angle],
+///   [`{27% * 100deg}`],
+///   [`{27deg}`],
+///
+///   [@int],
+///   [`{27% * 2}`],
+///   [`{54%}`],
+///
+///   [@float],
+///   [`{27% * 0.37037}`],
+///   [`{10%}`],
+///
+///   [@fraction],
+///   [`{27% * 3fr}`],
+///   [`{0.81fr}`],
+/// )
+///
+/// When ratios are @repr[displayed] in the document, they are rounded to two
+/// significant digits for readability.
 #[ty(cast)]
 #[derive(Default, Copy, Clone, Eq, PartialEq, Ord, PartialOrd, Hash)]
 pub struct Ratio(Scalar);
@@ -42,6 +84,11 @@ impl Ratio {
         (self.0).get()
     }
 
+    /// Get the underlying ratio.
+    pub const fn scalar(self) -> Scalar {
+        self.0
+    }
+
     /// Whether the ratio is zero.
     pub fn is_zero(self) -> bool {
         self.0 == 0.0
@@ -60,11 +107,22 @@ impl Ratio {
     /// Return the ratio of the given `whole`.
     pub fn of<T: Numeric>(self, whole: T) -> T {
         let resolved = whole * self.get();
-        if resolved.is_finite() {
-            resolved
-        } else {
-            T::zero()
-        }
+        if resolved.is_finite() { resolved } else { T::zero() }
+    }
+
+    /// The reciprocal (inverse) of this ratio, `1/x`.
+    pub fn recip(self) -> Self {
+        Self::new(self.get().recip())
+    }
+}
+
+impl Numeric for Ratio {
+    fn zero() -> Self {
+        Ratio::zero()
+    }
+
+    fn is_finite(self) -> bool {
+        self.0.is_finite()
     }
 }
 

@@ -3,9 +3,9 @@ use std::iter::Sum;
 use std::ops::{Add, Div, Mul, Neg, Rem};
 
 use ecow::EcoString;
-use typst_utils::{Numeric, Scalar};
+use typst_utils::{Numeric, NumericLength, Scalar};
 
-use crate::foundations::{cast, repr, Fold, Repr, Value};
+use crate::foundations::{Fold, Repr, Value, cast, repr};
 
 /// An absolute length.
 #[derive(Default, Copy, Clone, Eq, PartialEq, Ord, PartialOrd, Hash)]
@@ -55,6 +55,11 @@ impl Abs {
     /// Get the value of this absolute length in raw units.
     pub const fn to_raw(self) -> f64 {
         self.0.get()
+    }
+
+    /// Get the value of this absolute length in raw units.
+    pub const fn scalar(self) -> Scalar {
+        self.0
     }
 
     /// Get the value of this absolute length in a unit.
@@ -128,6 +133,8 @@ impl Abs {
         self.0.get().signum()
     }
 }
+
+impl NumericLength for Abs {}
 
 impl Numeric for Abs {
     fn zero() -> Self {

@@ -263,7 +263,7 @@ With the *Use file name as caption* setting (CLI: `--filename-captions`) an imag
 
 ## PDF embeds
 
-A PDF can be embedded like an image: `![[file.pdf]]`. The export includes its pages, so an annex keeps the document's page numbering and chapter headings. In the Obsidian plugin the *PDF embeds* setting chooses how the pages appear: inside the page margins, keeping the header and footer (default), or as full pages. This needs Typst 0.14 or newer. The command line tool does not include PDFs yet and shows a placeholder.
+A PDF can be embedded like an image: `![[file.pdf]]`. The export includes its pages, so an annex keeps the document's page numbering and chapter headings. In the Obsidian plugin the *PDF embeds* setting chooses how the pages appear: inside the page margins, keeping the header and footer (default), or as full pages. This needs Typst 0.14 or newer. The command line tool includes PDFs by default too; `--pdf-embeds off` shows a placeholder instead.
 
 | Syntax | Pages included |
 | --- | --- |

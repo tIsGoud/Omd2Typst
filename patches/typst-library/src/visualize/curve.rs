@@ -1,14 +1,13 @@
-use kurbo::ParamCurveExtrema;
-use typst_macros::{scope, Cast};
+use kurbo::Shape as _;
+use typst_macros::{Cast, scope};
 use typst_utils::Numeric;
 
-use crate::diag::{bail, HintedStrResult, HintedString, SourceResult};
-use crate::engine::Engine;
-use crate::foundations::{
-    cast, elem, Content, NativeElement, Packed, Show, Smart, StyleChain,
-};
-use crate::layout::{Abs, Axes, BlockElem, Length, Point, Rel, Size};
+use crate::diag::{HintedStrResult, HintedString, bail};
+use crate::foundations::{Content, Packed, Smart, cast, elem};
+use crate::layout::{Abs, Axes, Length, Point, Rect, Rel, Size};
 use crate::visualize::{FillRule, Paint, Stroke};
+
+use super::FixedStroke;
 
 /// A curve consisting of movements, lines, and Bézier segments.
 ///
@@ -29,7 +28,7 @@ use crate::visualize::{FillRule, Paint, Stroke};
 /// Bézier curve control points can be skipped by passing `{none}` or
 /// automatically mirrored from the preceding segment by passing `{auto}`.
 ///
-/// # Example
+/// = Example <example>
 /// ```example
 /// #curve(
 ///   fill: blue.lighten(80%),
@@ -40,12 +39,12 @@ use crate::visualize::{FillRule, Paint, Stroke};
 ///   curve.close(),
 /// )
 /// ```
-#[elem(scope, Show)]
+#[elem(scope)]
 pub struct CurveElem {
     /// How to fill the curve.
     ///
-    /// When setting a fill, the default stroke disappears. To create a
-    /// rectangle with both fill and stroke, you have to configure both.
+    /// When setting a fill, the default stroke disappears. To create a curve
+    /// with both fill and stroke, you have to configure both.
     pub fill: Option<Paint>,
 
     /// The drawing rule used to fill the curve.
@@ -70,10 +69,10 @@ pub struct CurveElem {
     #[default]
     pub fill_rule: FillRule,
 
-    /// How to [stroke] the curve. This can be:
+    /// How to @stroke[stroke] the curve.
     ///
-    /// Can be set to `{none}` to disable the stroke or to `{auto}` for a
-    /// stroke of `{1pt}` black if and if only if no fill is given.
+    /// Can be set to `{none}` to disable the stroke or to `{auto}` for a stroke
+    /// of `{1pt}` black if and only if no fill is given.
     ///
     /// ```example
     /// #let down = curve.line((40pt, 40pt), relative: true)
@@ -84,7 +83,6 @@ pub struct CurveElem {
     ///   down, up, down, up, down,
     /// )
     /// ```
-    #[resolve]
     #[fold]
     pub stroke: Smart<Option<Stroke>>,
 
@@ -92,14 +90,6 @@ pub struct CurveElem {
     /// segment, and closes.
     #[variadic]
     pub components: Vec<CurveComponent>,
-}
-
-impl Show for Packed<CurveElem> {
-    fn show(&self, engine: &mut Engine, _: StyleChain) -> SourceResult<Content> {
-        Ok(BlockElem::single_layouter(self.clone(), engine.routines.layout_curve)
-            .pack()
-            .spanned(self.span()))
-    }
 }
 
 #[scope]
@@ -296,7 +286,8 @@ pub struct CurveCubic {
     ///
     /// - If `{auto}` and this element follows another `curve.cubic` element,
     ///   the last control point will be mirrored. In SVG terms, this makes
-    ///   `curve.cubic` behave like the `S` operator instead of the `C` operator.
+    ///   `curve.cubic` behave like the `S` operator instead of the `C`
+    ///   operator.
     ///
     /// - If `{none}`, the curve has no first control point, or equivalently,
     ///   the control point defaults to the curve's starting point.
@@ -378,7 +369,7 @@ pub struct CurveClose {
 }
 
 /// How to close a curve.
-#[derive(Debug, Copy, Clone, Default, Eq, PartialEq, Hash, Cast)]
+#[derive(Debug, Default, Copy, Clone, Eq, PartialEq, Hash, Cast)]
 pub enum CloseMode {
     /// Closes the curve with a smooth segment that takes into account the
     /// control point opposite the start point.
@@ -484,49 +475,82 @@ impl Curve {
         }
     }
 
-    /// Computes the size of the bounding box of this curve.
-    pub fn bbox_size(&self) -> Size {
-        let mut min_x = Abs::inf();
-        let mut min_y = Abs::inf();
-        let mut max_x = -Abs::inf();
-        let mut max_y = -Abs::inf();
+    /// Computes the bounding box of this curve.
+    pub fn bbox(&self, stroke: Option<&FixedStroke>) -> Rect {
+        let bbox = if let Some(stroke) = stroke {
+            self.to_kurbo_stroke(stroke).bounding_box()
+        } else {
+            kurbo::BezPath::from_vec(self.to_kurbo().collect()).bounding_box()
+        };
 
-        let mut cursor = Point::zero();
-        for item in self.0.iter() {
-            match item {
-                CurveItem::Move(to) => {
-                    min_x = min_x.min(cursor.x);
-                    min_y = min_y.min(cursor.y);
-                    max_x = max_x.max(cursor.x);
-                    max_y = max_y.max(cursor.y);
-                    cursor = *to;
-                }
-                CurveItem::Line(to) => {
-                    min_x = min_x.min(cursor.x);
-                    min_y = min_y.min(cursor.y);
-                    max_x = max_x.max(cursor.x);
-                    max_y = max_y.max(cursor.y);
-                    cursor = *to;
-                }
-                CurveItem::Cubic(c0, c1, end) => {
-                    let cubic = kurbo::CubicBez::new(
-                        kurbo::Point::new(cursor.x.to_pt(), cursor.y.to_pt()),
-                        kurbo::Point::new(c0.x.to_pt(), c0.y.to_pt()),
-                        kurbo::Point::new(c1.x.to_pt(), c1.y.to_pt()),
-                        kurbo::Point::new(end.x.to_pt(), end.y.to_pt()),
-                    );
-
-                    let bbox = cubic.bounding_box();
-                    min_x = min_x.min(Abs::pt(bbox.x0)).min(Abs::pt(bbox.x1));
-                    min_y = min_y.min(Abs::pt(bbox.y0)).min(Abs::pt(bbox.y1));
-                    max_x = max_x.max(Abs::pt(bbox.x0)).max(Abs::pt(bbox.x1));
-                    max_y = max_y.max(Abs::pt(bbox.y0)).max(Abs::pt(bbox.y1));
-                    cursor = *end;
-                }
-                CurveItem::Close => (),
-            }
-        }
-
-        Size::new(max_x - min_x, max_y - min_y)
+        Rect::new(
+            Point::new(Abs::raw(bbox.x0), Abs::raw(bbox.y0)),
+            Point::new(Abs::raw(bbox.x1), Abs::raw(bbox.y1)),
+        )
     }
+}
+
+impl Curve {
+    fn to_kurbo(&self) -> impl Iterator<Item = kurbo::PathEl> + '_ {
+        use kurbo::PathEl;
+
+        self.0.iter().map(|item| match *item {
+            CurveItem::Move(point) => PathEl::MoveTo(point_to_kurbo(point)),
+            CurveItem::Line(point) => PathEl::LineTo(point_to_kurbo(point)),
+            CurveItem::Cubic(point, point1, point2) => PathEl::CurveTo(
+                point_to_kurbo(point),
+                point_to_kurbo(point1),
+                point_to_kurbo(point2),
+            ),
+            CurveItem::Close => PathEl::ClosePath,
+        })
+    }
+
+    /// When this curve is interpreted as a clip mask, would it contain `point`?
+    pub fn contains(&self, fill_rule: FillRule, needle: Point) -> bool {
+        let kurbo = kurbo::BezPath::from_vec(self.to_kurbo().collect());
+        let windings = kurbo::Shape::winding(&kurbo, point_to_kurbo(needle));
+        match fill_rule {
+            FillRule::NonZero => windings != 0,
+            FillRule::EvenOdd => windings % 2 != 0,
+        }
+    }
+
+    /// When this curve is stroked with `stroke`, would the stroke contain
+    /// `point`?
+    pub fn stroke_contains(&self, stroke: &FixedStroke, needle: Point) -> bool {
+        kurbo::Shape::contains(&self.to_kurbo_stroke(stroke), point_to_kurbo(needle))
+    }
+
+    fn to_kurbo_stroke(&self, stroke: &FixedStroke) -> kurbo::BezPath {
+        let width = stroke.thickness.to_raw();
+        let cap = match stroke.cap {
+            super::LineCap::Butt => kurbo::Cap::Butt,
+            super::LineCap::Round => kurbo::Cap::Round,
+            super::LineCap::Square => kurbo::Cap::Square,
+        };
+        let join = match stroke.join {
+            super::LineJoin::Miter => kurbo::Join::Miter,
+            super::LineJoin::Round => kurbo::Join::Round,
+            super::LineJoin::Bevel => kurbo::Join::Bevel,
+        };
+        let miter_limit = stroke.miter_limit.get();
+        let mut style = kurbo::Stroke::new(width)
+            .with_caps(cap)
+            .with_join(join)
+            .with_miter_limit(miter_limit);
+        if let Some(dash) = &stroke.dash {
+            style = style.with_dashes(
+                dash.phase.to_raw(),
+                dash.array.iter().copied().map(Abs::to_raw),
+            );
+        }
+        let opts = kurbo::StrokeOpts::default();
+        let tolerance = 0.01;
+        kurbo::stroke(self.to_kurbo(), &style, &opts, tolerance)
+    }
+}
+
+fn point_to_kurbo(point: Point) -> kurbo::Point {
+    kurbo::Point::new(point.x.to_raw(), point.y.to_raw())
 }

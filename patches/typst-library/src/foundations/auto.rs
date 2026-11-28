@@ -1,11 +1,12 @@
 use std::fmt::{self, Debug, Formatter};
+use std::ops::Deref;
 
 use ecow::EcoString;
 
 use crate::diag::HintedStrResult;
 use crate::foundations::{
-    ty, CastInfo, Fold, FromValue, IntoValue, Reflect, Repr, Resolve, StyleChain, Type,
-    Value,
+    CastInfo, Fold, FromValue, IntoValue, Reflect, Repr, Resolve, StyleChain, Type,
+    Value, ty,
 };
 
 /// A value that indicates a smart default.
@@ -13,9 +14,9 @@ use crate::foundations::{
 /// The auto type has exactly one value: `{auto}`.
 ///
 /// Parameters that support the `{auto}` value have some smart default or
-/// contextual behaviour. A good example is the [text direction]($text.dir)
+/// contextual behaviour. A good example is the @text.dir[text direction]
 /// parameter. Setting it to `{auto}` lets Typst automatically determine the
-/// direction from the [text language]($text.lang).
+/// direction from the @text.lang[text language].
 #[ty(cast, name = "auto")]
 #[derive(Default, Copy, Clone, Eq, PartialEq, Ord, PartialOrd, Hash)]
 pub struct AutoValue;
@@ -62,9 +63,10 @@ impl Repr for AutoValue {
 }
 
 /// A value that can be automatically determined.
-#[derive(Debug, Copy, Clone, Eq, PartialEq, Ord, PartialOrd, Hash)]
+#[derive(Debug, Default, Copy, Clone, Eq, PartialEq, Ord, PartialOrd, Hash)]
 pub enum Smart<T> {
     /// The value should be determined smartly based on the circumstances.
+    #[default]
     Auto,
     /// A specific value.
     Custom(T),
@@ -94,6 +96,17 @@ impl<T> Smart<T> {
 
     /// Returns a `Smart<&T>` borrowing the inner `T`.
     pub fn as_ref(&self) -> Smart<&T> {
+        match self {
+            Smart::Auto => Smart::Auto,
+            Smart::Custom(v) => Smart::Custom(v),
+        }
+    }
+
+    /// Returns a `Smart<&T::Target>`, derefercing the inner `T`.
+    pub fn as_deref(&self) -> Smart<&T::Target>
+    where
+        T: Deref,
+    {
         match self {
             Smart::Auto => Smart::Auto,
             Smart::Custom(v) => Smart::Custom(v),
@@ -207,9 +220,12 @@ impl<T> Smart<Smart<T>> {
     }
 }
 
-impl<T> Default for Smart<T> {
-    fn default() -> Self {
-        Self::Auto
+impl<T> From<Option<T>> for Smart<T> {
+    fn from(value: Option<T>) -> Self {
+        match value {
+            Some(v) => Smart::Custom(v),
+            None => Smart::Auto,
+        }
     }
 }
 

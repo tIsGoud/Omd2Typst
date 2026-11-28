@@ -3,10 +3,10 @@ use std::fmt::{self, Display, Formatter, Write};
 use std::hash::Hash;
 use std::iter::repeat;
 
-use ecow::{eco_format, EcoString, EcoVec};
+use ecow::{EcoString, EcoVec, eco_format};
 
-use crate::diag::{bail, StrResult};
-use crate::foundations::{cast, func, repr, scope, ty, Repr};
+use crate::diag::{StrResult, bail};
+use crate::foundations::{Repr, cast, func, repr, scope, ty};
 
 /// A version with an arbitrary number of components.
 ///
@@ -21,10 +21,9 @@ use crate::foundations::{cast, func, repr, scope, ty, Repr};
 /// The current version of the Typst compiler is available as `sys.version`.
 ///
 /// You can convert a version to an array of explicitly given components using
-/// the [`array`] constructor.
+/// the @array constructor.
 #[ty(scope, cast)]
 #[derive(Debug, Default, Clone, Hash)]
-#[allow(clippy::derived_hash_with_manual_eq)]
 pub struct Version(EcoVec<u32>);
 
 impl Version {
@@ -65,13 +64,28 @@ impl Version {
     ///
     /// It can have any number of components (even zero).
     ///
-    /// ```example
-    /// #version() \
-    /// #version(1) \
-    /// #version(1, 2, 3, 4) \
-    /// #version((1, 2, 3, 4)) \
-    /// #version((1, 2), 3)
-    /// ```
+    /// #example(
+    ///   title: "Constructing versions",
+    ///   ```
+    ///   #version() \
+    ///   #version(1) \
+    ///   #version(1, 2, 3, 4) \
+    ///   #version((1, 2, 3, 4)) \
+    ///   #version((1, 2), 3)
+    ///   ```
+    /// )
+    ///
+    /// As a practical use case, this allows comparing the current version
+    /// (@version[`{sys.version}`]) to a specific one.
+    ///
+    /// #example(
+    ///   title: "Comparing with the current version",
+    ///   ```
+    ///   Current version: #sys.version \
+    ///   #(sys.version >= version(0, 14, 0)) \
+    ///   #(version(3, 2, 0) > version(4, 1, 0))
+    ///   ```
+    /// )
     #[func(constructor)]
     pub fn construct(
         /// The components of the version (array arguments are flattened)
@@ -109,7 +123,7 @@ impl Version {
                 Some(pos_index) if pos_index >= 0 => index = pos_index,
                 _ => bail!(
                     "component index out of bounds (index: {index}, len: {})",
-                    self.0.len()
+                    self.0.len(),
                 ),
             }
         }

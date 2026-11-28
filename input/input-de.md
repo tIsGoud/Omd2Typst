@@ -270,7 +270,7 @@ Mit der Einstellung *Use file name as caption* (CLI: `--filename-captions`) erh�
 
 ## PDF-Einbettungen
 
-Ein PDF kann wie ein Bild eingebettet werden: `![[datei.pdf]]`. Der Export enthält seine Seiten, sodass ein Anhang die Seitennummerierung und die Kapitelüberschriften des Dokuments behält. In der Obsidian-Erweiterung legt die Einstellung *PDF embeds* fest, wie die Seiten erscheinen: innerhalb der Seitenränder mit Kopf- und Fußzeile (Standard) oder als ganze Seiten. Dafür ist Typst 0.14 oder neuer nötig. Das Kommandozeilenwerkzeug bindet PDFs noch nicht ein und zeigt einen Platzhalter.
+Ein PDF kann wie ein Bild eingebettet werden: `![[datei.pdf]]`. Der Export enthält seine Seiten, sodass ein Anhang die Seitennummerierung und die Kapitelüberschriften des Dokuments behält. In der Obsidian-Erweiterung legt die Einstellung *PDF embeds* fest, wie die Seiten erscheinen: innerhalb der Seitenränder mit Kopf- und Fußzeile (Standard) oder als ganze Seiten. Dafür ist Typst 0.14 oder neuer nötig. Das Kommandozeilenwerkzeug bindet PDFs standardmäßig ebenfalls ein; mit `--pdf-embeds off` erscheint stattdessen ein Platzhalter.
 
 | Syntax | Enthaltene Seiten |
 | --- | --- |

@@ -281,7 +281,7 @@ Met de instelling *Use file name as caption* (CLI: `--filename-captions`) krijgt
 
 ## PDF-embeds
 
-Een PDF kan net als een afbeelding worden ingesloten: `![[bestand.pdf]]`. De export neemt de pagina's op, zodat een bijlage de paginanummering en hoofdstukkoppen van het document behoudt. In de Obsidian-plugin bepaalt de instelling *PDF embeds* hoe de pagina's verschijnen: binnen de paginamarges met behoud van koptekst en voettekst (standaard), of als volledige pagina's. Hiervoor is Typst 0.14 of nieuwer nodig. De opdrachtregeltool neemt PDF's nog niet op en toont een plaatshouder.
+Een PDF kan net als een afbeelding worden ingesloten: `![[bestand.pdf]]`. De export neemt de pagina's op, zodat een bijlage de paginanummering en hoofdstukkoppen van het document behoudt. In de Obsidian-plugin bepaalt de instelling *PDF embeds* hoe de pagina's verschijnen: binnen de paginamarges met behoud van koptekst en voettekst (standaard), of als volledige pagina's. Hiervoor is Typst 0.14 of nieuwer nodig. De opdrachtregeltool neemt PDF's standaard ook op; met `--pdf-embeds off` verschijnt een plaatshouder.
 
 | Syntax | Opgenomen pagina's |
 | --- | --- |

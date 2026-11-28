@@ -1,20 +1,20 @@
 use std::fmt::{self, Debug, Formatter};
 use std::hash::{Hash, Hasher};
 use std::str::FromStr;
-use std::sync::LazyLock;
+use std::sync::{Arc, LazyLock};
 
-use ecow::{eco_format, EcoString, EcoVec};
+use ecow::{EcoString, EcoVec, eco_format};
+use moxcms::{ColorProfile, Layout, RenderingIntent, TransformOptions};
 use palette::encoding::{self, Linear};
 use palette::{
     Alpha, Darken, Desaturate, FromColor, Lighten, OklabHue, RgbHue, Saturate, ShiftHue,
 };
-use qcms::Profile;
 use typst_syntax::{Span, Spanned};
 
-use crate::diag::{bail, At, SourceResult, StrResult};
+use crate::diag::{At, HintedStrResult, SourceResult, StrResult, bail};
 use crate::foundations::{
-    array, cast, func, repr, scope, ty, Args, Array, IntoValue, Module, Repr, Scope, Str,
-    Value,
+    Args, Array, Func, IntoValue, Module, Repr, Scope, Smart, Str, Value, array, cast,
+    func, repr, scope, ty,
 };
 use crate::layout::{Angle, Ratio};
 
@@ -33,71 +33,114 @@ pub type Luma = palette::luma::Lumaa<encoding::Srgb, f32>;
 /// to convert from CMYK to RGB. It is based on the CGATS TR 001-1995
 /// specification. See
 /// <https://github.com/saucecontrol/Compact-ICC-Profiles#cmyk>.
-static CMYK_TO_XYZ: LazyLock<Box<Profile>> = LazyLock::new(|| {
-    Profile::new_from_slice(typst_assets::icc::CMYK_TO_XYZ, false).unwrap()
+static CMYK_TO_XYZ: LazyLock<ColorProfile> = LazyLock::new(|| {
+    ColorProfile::new_from_slice(typst_assets::icc::CMYK_TO_XYZ).unwrap()
 });
 
 /// The target sRGB profile.
-static SRGB_PROFILE: LazyLock<Box<Profile>> = LazyLock::new(|| {
-    let mut out = Profile::new_sRGB();
-    out.precache_output_transform();
-    out
-});
+static SRGB_PROFILE: LazyLock<ColorProfile> = LazyLock::new(ColorProfile::new_srgb);
 
-static TO_SRGB: LazyLock<qcms::Transform> = LazyLock::new(|| {
-    qcms::Transform::new_to(
-        &CMYK_TO_XYZ,
-        &SRGB_PROFILE,
-        qcms::DataType::CMYK,
-        qcms::DataType::RGB8,
-        // Our input profile only supports perceptual intent.
-        qcms::Intent::Perceptual,
-    )
-    .unwrap()
+static TO_SRGB: LazyLock<Arc<moxcms::Transform8BitExecutor>> = LazyLock::new(|| {
+    CMYK_TO_XYZ
+        .create_transform_8bit(
+            Layout::Rgba,
+            &SRGB_PROFILE,
+            Layout::Rgb,
+            TransformOptions {
+                // Our input profile only supports perceptual intent.
+                rendering_intent: RenderingIntent::Perceptual,
+                ..TransformOptions::default()
+            },
+        )
+        .unwrap()
 });
 
 /// A color in a specific color space.
 ///
 /// Typst supports:
-/// - sRGB through the [`rgb` function]($color.rgb)
-/// - Device CMYK through [`cmyk` function]($color.cmyk)
-/// - D65 Gray through the [`luma` function]($color.luma)
-/// - Oklab through the [`oklab` function]($color.oklab)
-/// - Oklch through the [`oklch` function]($color.oklch)
-/// - Linear RGB through the [`color.linear-rgb` function]($color.linear-rgb)
-/// - HSL through the [`color.hsl` function]($color.hsl)
-/// - HSV through the [`color.hsv` function]($color.hsv)
+/// - sRGB through the @color.rgb[`rgb` function]
+/// - Device CMYK through the @color.cmyk[`cmyk` function]
+/// - D65 Gray through the @color.luma[`luma` function]
+/// - Oklab through the @color.oklab[`oklab` function]
+/// - Oklch through the @color.oklch[`oklch` function]
+/// - Linear RGB through the @color.linear-rgb[`color.linear-rgb` function]
+/// - HSL through the @color.hsl[`color.hsl` function]
+/// - HSV through the @color.hsv[`color.hsv` function]
+/// - Color spaces described by spot colorants through the
+///   @color.spot[`color.spot` type]
 ///
+/// All color spaces except for CMYK and spot colorants have alpha channels.
 ///
-/// # Example
+/// Throughout the documentation, we use the term _process color_ for colors
+/// that can be blended with each other (currently all colors other than spot
+/// colors). In this term, _process_ signifies that the shade is being created
+/// throughout the printing process instead of ahead of time.
 ///
+/// = Example <example>
 /// ```example
 /// #rect(fill: aqua)
 /// ```
 ///
-/// # Predefined colors
+/// = Predefined colors <predefined-colors>
 /// Typst defines the following built-in colors:
 ///
-/// | Color     | Definition         |
-/// |-----------|:-------------------|
-/// | `black`   | `{luma(0)}`        |
-/// | `gray`    | `{luma(170)}`      |
-/// | `silver`  | `{luma(221)}`      |
-/// | `white`   | `{luma(255)}`      |
-/// | `navy`    | `{rgb("#001f3f")}` |
-/// | `blue`    | `{rgb("#0074d9")}` |
-/// | `aqua`    | `{rgb("#7fdbff")}` |
-/// | `teal`    | `{rgb("#39cccc")}` |
-/// | `eastern` | `{rgb("#239dad")}` |
-/// | `purple`  | `{rgb("#b10dc9")}` |
-/// | `fuchsia` | `{rgb("#f012be")}` |
-/// | `maroon`  | `{rgb("#85144b")}` |
-/// | `red`     | `{rgb("#ff4136")}` |
-/// | `orange`  | `{rgb("#ff851b")}` |
-/// | `yellow`  | `{rgb("#ffdc00")}` |
-/// | `olive`   | `{rgb("#3d9970")}` |
-/// | `green`   | `{rgb("#2ecc40")}` |
-/// | `lime`    | `{rgb("#01ff70")}` |
+/// #docs-table(
+///   table.header[Color][Definition],
+///
+///   [`black`],
+///   [`{luma(0)}`],
+///
+///   [`gray`],
+///   [`{luma(170)}`],
+///
+///   [`silver`],
+///   [`{luma(221)}`],
+///
+///   [`white`],
+///   [`{luma(255)}`],
+///
+///   [`navy`],
+///   [`{rgb("#001f3f")}`],
+///
+///   [`blue`],
+///   [`{rgb("#0074d9")}`],
+///
+///   [`aqua`],
+///   [`{rgb("#7fdbff")}`],
+///
+///   [`teal`],
+///   [`{rgb("#39cccc")}`],
+///
+///   [`eastern`],
+///   [`{rgb("#239dad")}`],
+///
+///   [`purple`],
+///   [`{rgb("#b10dc9")}`],
+///
+///   [`fuchsia`],
+///   [`{rgb("#f012be")}`],
+///
+///   [`maroon`],
+///   [`{rgb("#85144b")}`],
+///
+///   [`red`],
+///   [`{rgb("#ff4136")}`],
+///
+///   [`orange`],
+///   [`{rgb("#ff851b")}`],
+///
+///   [`yellow`],
+///   [`{rgb("#ffdc00")}`],
+///
+///   [`olive`],
+///   [`{rgb("#3d9970")}`],
+///
+///   [`green`],
+///   [`{rgb("#2ecc40")}`],
+///
+///   [`lime`],
+///   [`{rgb("#01ff70")}`],
+/// )
 ///
 /// The predefined colors and the most important color constructors are
 /// available globally and also in the color type's scope, so you can write
@@ -128,35 +171,81 @@ static TO_SRGB: LazyLock<qcms::Transform> = LazyLock::new(|| {
 /// )
 /// ```
 ///
-/// # Predefined color maps
+/// = Predefined color maps <predefined-color-maps>
 /// Typst also includes a number of preset color maps that can be used for
-/// [gradients]($gradient.linear). These are simply arrays of colors defined in
-/// the module `color.map`.
+/// @gradient:stops[gradients]. These are simply arrays of colors defined in the
+/// module `color.map`.
 ///
 /// ```example
 /// #circle(fill: gradient.linear(..color.map.crest))
 /// ```
 ///
-/// | Map        | Details                                                     |
-/// |------------|:------------------------------------------------------------|
-/// | `turbo`    | A perceptually uniform rainbow-like color map. Read [this blog post](https://ai.googleblog.com/2019/08/turbo-improved-rainbow-colormap-for.html) for more details. |
-/// | `cividis`  | A blue to gray to yellow color map. See [this blog post](https://bids.github.io/colormap/) for more details. |
-/// | `rainbow`  | Cycles through the full color spectrum. This color map is best used by setting the interpolation color space to [HSL]($color.hsl). The rainbow gradient is **not suitable** for data visualization because it is not perceptually uniform, so the differences between values become unclear to your readers. It should only be used for decorative purposes. |
-/// | `spectral` | Red to yellow to blue color map.                            |
-/// | `viridis`  | A purple to teal to yellow color map.                       |
-/// | `inferno`  | A black to red to yellow color map.                         |
-/// | `magma`    | A black to purple to yellow color map.                      |
-/// | `plasma`   | A purple to pink to yellow color map.                       |
-/// | `rocket`   | A black to red to white color map.                          |
-/// | `mako`     | A black to teal to yellow color map.                        |
-/// | `vlag`     | A light blue to white to red color map.                     |
-/// | `icefire`  | A light teal to black to yellow color map.                  |
-/// | `flare`    | A orange to purple color map that is perceptually uniform.  |
-/// | `crest`    | A blue to white to red color map.                           |
+/// #docs-table(
+///   table.header[Map][Details],
+///
+///   [`turbo`],
+///   [
+///     A perceptually uniform rainbow-like color map. Read
+///     #link("https://ai.googleblog.com/2019/08/turbo-improved-rainbow-colormap-for.html")[this blog post]
+///     for more details.
+///   ],
+///
+///   [`cividis`],
+///   [
+///     A blue to gray to yellow color map. See
+///     #link("https://bids.github.io/colormap/")[this blog post] for more
+///     details.
+///   ],
+///
+///   [`rainbow`],
+///   [
+///     Cycles through the full color spectrum. This color map is best used by
+///     setting the interpolation color space to @color.hsl[HSL]. The rainbow
+///     gradient is *not suitable* for data visualization because it is not
+///     perceptually uniform, so the differences between values become unclear
+///     to your readers. It should only be used for decorative purposes.
+///   ],
+///
+///   [`spectral`],
+///   [Red to yellow to blue color map.],
+///
+///   [`viridis`],
+///   [A purple to teal to yellow color map.],
+///
+///   [`inferno`],
+///   [A black to red to yellow color map.],
+///
+///   [`magma`],
+///   [A black to purple to yellow color map.],
+///
+///   [`plasma`],
+///   [A purple to pink to yellow color map.],
+///
+///   [`rocket`],
+///   [A black to red to white color map.],
+///
+///   [`mako`],
+///   [A black to teal to white color map.],
+///
+///   [`coolwarm`],
+///   [A blue to white to red color map with smooth transitions.],
+///
+///   [`vlag`],
+///   [A light blue to white to red color map.],
+///
+///   [`icefire`],
+///   [A light teal to black to orange color map.],
+///
+///   [`flare`],
+///   [A orange to purple color map that is perceptually uniform.],
+///
+///   [`crest`],
+///   [A light green to blue color map.],
+/// )
 ///
 /// Some popular presets are not included because they are not available under a
 /// free licence. Others, like
-/// [Jet](https://jakevdp.github.io/blog/2014/10/16/how-bad-is-your-colormap/),
+/// #link("https://jakevdp.github.io/blog/2014/10/16/how-bad-is-your-colormap/")[Jet],
 /// are not included because they are not color blind friendly. Feel free to use
 /// or create a package with other presets that are useful to you!
 ///
@@ -167,8 +256,8 @@ static TO_SRGB: LazyLock<qcms::Transform> = LazyLock::new(|| {
 /// #let maps = (
 ///   "turbo", "cividis", "rainbow", "spectral",
 ///   "viridis", "inferno", "magma", "plasma",
-///   "rocket", "mako", "vlag", "icefire",
-///   "flare", "crest",
+///   "rocket", "mako", "coolwarm", "vlag",
+///   "icefire", "flare", "crest",
 /// )
 ///
 /// #stack(dir: ltr, spacing: 3pt, ..maps.map((name) => {
@@ -189,49 +278,51 @@ static TO_SRGB: LazyLock<qcms::Transform> = LazyLock::new(|| {
 /// }))
 /// ```
 #[ty(scope, cast)]
-#[derive(Copy, Clone)]
+#[derive(Clone, PartialEq, Eq, Hash)]
 pub enum Color {
-    /// A 32-bit luma color.
-    Luma(Luma),
-    /// A 32-bit L\*a\*b\* color in the Oklab color space.
-    Oklab(Oklab),
-    /// A 32-bit LCh color in the Oklab color space.
-    Oklch(Oklch),
-    /// A 32-bit RGB color.
-    Rgb(Rgb),
-    /// A 32-bit linear RGB color.
-    LinearRgb(LinearRgb),
-    /// A 32-bit CMYK color.
-    Cmyk(Cmyk),
-    /// A 32-bit HSL color.
-    Hsl(Hsl),
-    /// A 32-bit HSV color.
-    Hsv(Hsv),
+    /// A process color.
+    Process(ProcessColor),
+    /// A spot color.
+    Spot(SpotColor),
 }
 
 #[scope]
 impl Color {
+    pub const BLACK: Self = Self::Process(ProcessColor::Luma(Luma::new(0.0, 1.0)));
+    pub const GRAY: Self = Self::Process(ProcessColor::Luma(Luma::new(0.6666666, 1.0)));
+    pub const WHITE: Self = Self::Process(ProcessColor::Luma(Luma::new(1.0, 1.0)));
+    pub const SILVER: Self = Self::Process(ProcessColor::Luma(Luma::new(0.8666667, 1.0)));
+    pub const NAVY: Self =
+        Self::Process(ProcessColor::Rgb(Rgb::new(0.0, 0.121569, 0.247059, 1.0)));
+    pub const BLUE: Self =
+        Self::Process(ProcessColor::Rgb(Rgb::new(0.0, 0.454902, 0.85098, 1.0)));
+    pub const AQUA: Self =
+        Self::Process(ProcessColor::Rgb(Rgb::new(0.4980392, 0.858823, 1.0, 1.0)));
+    pub const TEAL: Self =
+        Self::Process(ProcessColor::Rgb(Rgb::new(0.223529, 0.8, 0.8, 1.0)));
+    pub const EASTERN: Self =
+        Self::Process(ProcessColor::Rgb(Rgb::new(0.13725, 0.615686, 0.678431, 1.0)));
+    pub const PURPLE: Self =
+        Self::Process(ProcessColor::Rgb(Rgb::new(0.694118, 0.050980, 0.788235, 1.0)));
+    pub const FUCHSIA: Self =
+        Self::Process(ProcessColor::Rgb(Rgb::new(0.941177, 0.070588, 0.745098, 1.0)));
+    pub const MAROON: Self =
+        Self::Process(ProcessColor::Rgb(Rgb::new(0.521569, 0.078431, 0.294118, 1.0)));
+    pub const RED: Self =
+        Self::Process(ProcessColor::Rgb(Rgb::new(1.0, 0.254902, 0.211765, 1.0)));
+    pub const ORANGE: Self =
+        Self::Process(ProcessColor::Rgb(Rgb::new(1.0, 0.521569, 0.105882, 1.0)));
+    pub const YELLOW: Self =
+        Self::Process(ProcessColor::Rgb(Rgb::new(1.0, 0.8627451, 0.0, 1.0)));
+    pub const OLIVE: Self =
+        Self::Process(ProcessColor::Rgb(Rgb::new(0.239216, 0.6, 0.4392157, 1.0)));
+    pub const GREEN: Self =
+        Self::Process(ProcessColor::Rgb(Rgb::new(0.1803922, 0.8, 0.2509804, 1.0)));
+    pub const LIME: Self =
+        Self::Process(ProcessColor::Rgb(Rgb::new(0.0039216, 1.0, 0.4392157, 1.0)));
+
     /// The module of preset color maps.
     pub const MAP: fn() -> Module = || typst_utils::singleton!(Module, map()).clone();
-
-    pub const BLACK: Self = Self::Luma(Luma::new(0.0, 1.0));
-    pub const GRAY: Self = Self::Luma(Luma::new(0.6666666, 1.0));
-    pub const WHITE: Self = Self::Luma(Luma::new(1.0, 1.0));
-    pub const SILVER: Self = Self::Luma(Luma::new(0.8666667, 1.0));
-    pub const NAVY: Self = Self::Rgb(Rgb::new(0.0, 0.121569, 0.247059, 1.0));
-    pub const BLUE: Self = Self::Rgb(Rgb::new(0.0, 0.454902, 0.85098, 1.0));
-    pub const AQUA: Self = Self::Rgb(Rgb::new(0.4980392, 0.858823, 1.0, 1.0));
-    pub const TEAL: Self = Self::Rgb(Rgb::new(0.223529, 0.8, 0.8, 1.0));
-    pub const EASTERN: Self = Self::Rgb(Rgb::new(0.13725, 0.615686, 0.678431, 1.0));
-    pub const PURPLE: Self = Self::Rgb(Rgb::new(0.694118, 0.050980, 0.788235, 1.0));
-    pub const FUCHSIA: Self = Self::Rgb(Rgb::new(0.941177, 0.070588, 0.745098, 1.0));
-    pub const MAROON: Self = Self::Rgb(Rgb::new(0.521569, 0.078431, 0.294118, 1.0));
-    pub const RED: Self = Self::Rgb(Rgb::new(1.0, 0.254902, 0.211765, 1.0));
-    pub const ORANGE: Self = Self::Rgb(Rgb::new(1.0, 0.521569, 0.105882, 1.0));
-    pub const YELLOW: Self = Self::Rgb(Rgb::new(1.0, 0.8627451, 0.0, 1.0));
-    pub const OLIVE: Self = Self::Rgb(Rgb::new(0.239216, 0.6, 0.4392157, 1.0));
-    pub const GREEN: Self = Self::Rgb(Rgb::new(0.1803922, 0.8, 0.2509804, 1.0));
-    pub const LIME: Self = Self::Rgb(Rgb::new(0.0039216, 1.0, 0.4392157, 1.0));
 
     /// Create a grayscale color.
     ///
@@ -239,7 +330,7 @@ impl Color {
     /// component.
     ///
     /// These components are also available using the
-    /// [`components`]($color.components) method.
+    /// @color.components[`components`] method.
     ///
     /// ```example
     /// #for x in range(250, step: 50) {
@@ -261,18 +352,21 @@ impl Color {
         #[external]
         color: Color,
     ) -> SourceResult<Color> {
-        Ok(if let Some(color) = args.find::<Color>()? {
-            color.to_luma()
-        } else {
-            let Component(gray) =
-                args.expect("gray component").unwrap_or(Component(Ratio::one()));
-            let RatioComponent(alpha) =
-                args.eat()?.unwrap_or(RatioComponent(Ratio::one()));
-            Self::Luma(Luma::new(gray.get() as f32, alpha.get() as f32))
-        })
+        Ok(Self::Process(ProcessColor::Luma(
+            if let Some(color) = args.find::<Color>()? {
+                color.to_luma()
+            } else {
+                let Component(gray) =
+                    args.expect("gray component").unwrap_or(Component(Ratio::one()));
+                let RatioComponent(alpha) =
+                    args.eat()?.unwrap_or(RatioComponent(Ratio::one()));
+                Luma::new(gray.get() as f32, alpha.get() as f32)
+            },
+        )))
     }
 
-    /// Create an [Oklab](https://bottosson.github.io/posts/oklab/) color.
+    /// Create an #link("https://bottosson.github.io/posts/oklab/")[Oklab]
+    /// color.
     ///
     /// This color space is well suited for the following use cases:
     /// - Color manipulation such as saturating while keeping perceived hue
@@ -281,15 +375,15 @@ impl Color {
     ///
     /// A linear Oklab color is represented internally by an array of four
     /// components:
-    /// - lightness ([`ratio`])
-    /// - a ([`float`] or [`ratio`].
-    ///   Ratios are relative to `{0.4}`; meaning `{50%}` is equal to `{0.2}`)
-    /// - b ([`float`] or [`ratio`].
-    ///   Ratios are relative to `{0.4}`; meaning `{50%}` is equal to `{0.2}`)
-    /// - alpha ([`ratio`])
+    /// - lightness (@ratio)
+    /// - a (@float or @ratio. Ratios are relative to `{0.4}`; meaning `{50%}`
+    ///   is equal to `{0.2}`)
+    /// - b (@float or @ratio. Ratios are relative to `{0.4}`; meaning `{50%}`
+    ///   is equal to `{0.2}`)
+    /// - alpha (@ratio)
     ///
     /// These components are also available using the
-    /// [`components`]($color.components) method.
+    /// @color.components[`components`] method.
     ///
     /// ```example
     /// #square(
@@ -317,19 +411,22 @@ impl Color {
         #[external]
         color: Color,
     ) -> SourceResult<Color> {
-        Ok(if let Some(color) = args.find::<Color>()? {
-            color.to_oklab()
-        } else {
-            let RatioComponent(l) = args.expect("lightness component")?;
-            let ChromaComponent(a) = args.expect("A component")?;
-            let ChromaComponent(b) = args.expect("B component")?;
-            let RatioComponent(alpha) =
-                args.eat()?.unwrap_or(RatioComponent(Ratio::one()));
-            Self::Oklab(Oklab::new(l.get() as f32, a, b, alpha.get() as f32))
-        })
+        Ok(Self::Process(ProcessColor::Oklab(
+            if let Some(color) = args.find::<Color>()? {
+                color.to_oklab()
+            } else {
+                let RatioComponent(l) = args.expect("lightness component")?;
+                let ChromaComponent(a) = args.expect("A component")?;
+                let ChromaComponent(b) = args.expect("B component")?;
+                let RatioComponent(alpha) =
+                    args.eat()?.unwrap_or(RatioComponent(Ratio::one()));
+                Oklab::new(l.get() as f32, a, b, alpha.get() as f32)
+            },
+        )))
     }
 
-    /// Create an [Oklch](https://bottosson.github.io/posts/oklab/) color.
+    /// Create an #link("https://bottosson.github.io/posts/oklab/")[Oklch]
+    /// color.
     ///
     /// This color space is well suited for the following use cases:
     /// - Color manipulation involving lightness, chroma, and hue
@@ -338,14 +435,14 @@ impl Color {
     ///
     /// A linear Oklch color is represented internally by an array of four
     /// components:
-    /// - lightness ([`ratio`])
-    /// - chroma ([`float`] or [`ratio`].
-    ///   Ratios are relative to `{0.4}`; meaning `{50%}` is equal to `{0.2}`)
-    /// - hue ([`angle`])
-    /// - alpha ([`ratio`])
+    /// - lightness (@ratio)
+    /// - chroma (@float or @ratio. Ratios are relative to `{0.4}`; meaning
+    ///   `{50%}` is equal to `{0.2}`)
+    /// - hue (@angle)
+    /// - alpha (@ratio)
     ///
     /// These components are also available using the
-    /// [`components`]($color.components) method.
+    /// @color.components[`components`] method.
     ///
     /// ```example
     /// #square(
@@ -373,21 +470,23 @@ impl Color {
         #[external]
         color: Color,
     ) -> SourceResult<Color> {
-        Ok(if let Some(color) = args.find::<Color>()? {
-            color.to_oklch()
-        } else {
-            let RatioComponent(l) = args.expect("lightness component")?;
-            let ChromaComponent(c) = args.expect("chroma component")?;
-            let h: Angle = args.expect("hue component")?;
-            let RatioComponent(alpha) =
-                args.eat()?.unwrap_or(RatioComponent(Ratio::one()));
-            Self::Oklch(Oklch::new(
-                l.get() as f32,
-                c,
-                OklabHue::from_degrees(h.to_deg() as f32),
-                alpha.get() as f32,
-            ))
-        })
+        Ok(Self::Process(ProcessColor::Oklch(
+            if let Some(color) = args.find::<Color>()? {
+                color.to_oklch()
+            } else {
+                let RatioComponent(l) = args.expect("lightness component")?;
+                let ChromaComponent(c) = args.expect("chroma component")?;
+                let h: Angle = args.expect("hue component")?;
+                let RatioComponent(alpha) =
+                    args.eat()?.unwrap_or(RatioComponent(Ratio::one()));
+                Oklch::new(
+                    l.get() as f32,
+                    c,
+                    OklabHue::from_degrees(h.to_deg() as f32),
+                    alpha.get() as f32,
+                )
+            },
+        )))
     }
 
     /// Create an RGB(A) color with linear luma.
@@ -395,17 +494,17 @@ impl Color {
     /// This color space is similar to sRGB, but with the distinction that the
     /// color component are not gamma corrected. This makes it easier to perform
     /// color operations such as blending and interpolation. Although, you
-    /// should prefer to use the [`oklab` function]($color.oklab) for these.
+    /// should prefer to use the @color.oklab[`oklab` function] for these.
     ///
     /// A linear RGB(A) color is represented internally by an array of four
     /// components:
-    /// - red ([`ratio`])
-    /// - green ([`ratio`])
-    /// - blue ([`ratio`])
-    /// - alpha ([`ratio`])
+    /// - red (@ratio)
+    /// - green (@ratio)
+    /// - blue (@ratio)
+    /// - alpha (@ratio)
     ///
     /// These components are also available using the
-    /// [`components`]($color.components) method.
+    /// @color.components[`components`] method.
     ///
     /// ```example
     /// #square(fill: color.linear-rgb(
@@ -433,34 +532,37 @@ impl Color {
         #[external]
         color: Color,
     ) -> SourceResult<Color> {
-        Ok(if let Some(color) = args.find::<Color>()? {
-            color.to_linear_rgb()
-        } else {
-            let Component(r) = args.expect("red component")?;
-            let Component(g) = args.expect("green component")?;
-            let Component(b) = args.expect("blue component")?;
-            let Component(a) = args.eat()?.unwrap_or(Component(Ratio::one()));
-            Self::LinearRgb(LinearRgb::new(
-                r.get() as f32,
-                g.get() as f32,
-                b.get() as f32,
-                a.get() as f32,
-            ))
-        })
+        Ok(Self::Process(ProcessColor::LinearRgb(
+            if let Some(color) = args.find::<Color>()? {
+                color.to_linear_rgb()
+            } else {
+                let Component(r) = args.expect("red component")?;
+                let Component(g) = args.expect("green component")?;
+                let Component(b) = args.expect("blue component")?;
+                let Component(a) = args.eat()?.unwrap_or(Component(Ratio::one()));
+                LinearRgb::new(
+                    r.get() as f32,
+                    g.get() as f32,
+                    b.get() as f32,
+                    a.get() as f32,
+                )
+            },
+        )))
     }
 
     /// Create an RGB(A) color.
     ///
     /// The color is specified in the sRGB color space.
     ///
-    /// An RGB(A) color is represented internally by an array of four components:
-    /// - red ([`ratio`])
-    /// - green ([`ratio`])
-    /// - blue ([`ratio`])
-    /// - alpha ([`ratio`])
+    /// An RGB(A) color is represented internally by an array of four
+    /// components:
+    /// - red (@ratio)
+    /// - green (@ratio)
+    /// - blue (@ratio)
+    /// - alpha (@ratio)
     ///
-    /// These components are also available using the [`components`]($color.components)
-    /// method.
+    /// These components are also available using the
+    /// @color.components[`components`] method.
     ///
     /// ```example
     /// #square(fill: rgb("#b1f2eb"))
@@ -505,18 +607,18 @@ impl Color {
         Ok(if let Some(string) = args.find::<Spanned<Str>>()? {
             Self::from_str(&string.v).at(string.span)?
         } else if let Some(color) = args.find::<Color>()? {
-            color.to_rgb()
+            Self::Process(ProcessColor::Rgb(color.to_rgb()))
         } else {
             let Component(r) = args.expect("red component")?;
             let Component(g) = args.expect("green component")?;
             let Component(b) = args.expect("blue component")?;
             let Component(a) = args.eat()?.unwrap_or(Component(Ratio::one()));
-            Self::Rgb(Rgb::new(
+            Self::Process(ProcessColor::Rgb(Rgb::new(
                 r.get() as f32,
                 g.get() as f32,
                 b.get() as f32,
                 a.get() as f32,
-            ))
+            )))
         })
     }
 
@@ -527,13 +629,13 @@ impl Color {
     /// the color.
     ///
     /// A CMYK color is represented internally by an array of four components:
-    /// - cyan ([`ratio`])
-    /// - magenta ([`ratio`])
-    /// - yellow ([`ratio`])
-    /// - key ([`ratio`])
+    /// - cyan (@ratio)
+    /// - magenta (@ratio)
+    /// - yellow (@ratio)
+    /// - key (@ratio)
     ///
     /// These components are also available using the
-    /// [`components`]($color.components) method.
+    /// @color.components[`components`] method.
     ///
     /// Note that CMYK colors are not currently supported when PDF/A output is
     /// enabled.
@@ -564,20 +666,17 @@ impl Color {
         #[external]
         color: Color,
     ) -> SourceResult<Color> {
-        Ok(if let Some(color) = args.find::<Color>()? {
-            color.to_cmyk()
-        } else {
-            let RatioComponent(c) = args.expect("cyan component")?;
-            let RatioComponent(m) = args.expect("magenta component")?;
-            let RatioComponent(y) = args.expect("yellow component")?;
-            let RatioComponent(k) = args.expect("key/black component")?;
-            Self::Cmyk(Cmyk::new(
-                c.get() as f32,
-                m.get() as f32,
-                y.get() as f32,
-                k.get() as f32,
-            ))
-        })
+        Ok(Self::Process(ProcessColor::Cmyk(
+            if let Some(color) = args.find::<Color>()? {
+                color.to_cmyk()
+            } else {
+                let RatioComponent(c) = args.expect("cyan component")?;
+                let RatioComponent(m) = args.expect("magenta component")?;
+                let RatioComponent(y) = args.expect("yellow component")?;
+                let RatioComponent(k) = args.expect("key/black component")?;
+                Cmyk::new(c.get() as f32, m.get() as f32, y.get() as f32, k.get() as f32)
+            },
+        )))
     }
 
     /// Create an HSL color.
@@ -587,13 +686,13 @@ impl Color {
     /// while keeping perceived hue.
     ///
     /// An HSL color is represented internally by an array of four components:
-    /// - hue ([`angle`])
-    /// - saturation ([`ratio`])
-    /// - lightness ([`ratio`])
-    /// - alpha ([`ratio`])
+    /// - hue (@angle)
+    /// - saturation (@ratio)
+    /// - lightness (@ratio)
+    /// - alpha (@ratio)
     ///
     /// These components are also available using the
-    /// [`components`]($color.components) method.
+    /// @color.components[`components`] method.
     ///
     /// ```example
     /// #square(
@@ -621,20 +720,20 @@ impl Color {
         #[external]
         color: Color,
     ) -> SourceResult<Color> {
-        Ok(if let Some(color) = args.find::<Color>()? {
+        Ok(Self::Process(ProcessColor::Hsl(if let Some(color) = args.find::<Color>()? {
             color.to_hsl()
         } else {
             let h: Angle = args.expect("hue component")?;
             let Component(s) = args.expect("saturation component")?;
             let Component(l) = args.expect("lightness component")?;
             let Component(a) = args.eat()?.unwrap_or(Component(Ratio::one()));
-            Self::Hsl(Hsl::new(
+            Hsl::new(
                 RgbHue::from_degrees(h.to_deg() as f32),
                 s.get() as f32,
                 l.get() as f32,
                 a.get() as f32,
-            ))
-        })
+            )
+        })))
     }
 
     /// Create an HSV color.
@@ -644,13 +743,13 @@ impl Color {
     /// while keeping perceived hue.
     ///
     /// An HSV color is represented internally by an array of four components:
-    /// - hue ([`angle`])
-    /// - saturation ([`ratio`])
-    /// - value ([`ratio`])
-    /// - alpha ([`ratio`])
+    /// - hue (@angle)
+    /// - saturation (@ratio)
+    /// - value (@ratio)
+    /// - alpha (@ratio)
     ///
     /// These components are also available using the
-    /// [`components`]($color.components) method.
+    /// @color.components[`components`] method.
     ///
     /// ```example
     /// #square(
@@ -678,38 +777,85 @@ impl Color {
         #[external]
         color: Color,
     ) -> SourceResult<Color> {
-        Ok(if let Some(color) = args.find::<Color>()? {
+        Ok(Self::Process(ProcessColor::Hsv(if let Some(color) = args.find::<Color>()? {
             color.to_hsv()
         } else {
             let h: Angle = args.expect("hue component")?;
             let Component(s) = args.expect("saturation component")?;
             let Component(v) = args.expect("value component")?;
             let Component(a) = args.eat()?.unwrap_or(Component(Ratio::one()));
-            Self::Hsv(Hsv::new(
+            Hsv::new(
                 RgbHue::from_degrees(h.to_deg() as f32),
                 s.get() as f32,
                 v.get() as f32,
                 a.get() as f32,
-            ))
-        })
+            )
+        })))
     }
 
     /// Extracts the components of this color.
     ///
     /// The size and values of this array depends on the color space. You can
-    /// obtain the color space using [`space`]($color.space). Below is a table
-    /// of the color spaces and their components:
+    /// obtain the color space using @color.space[`space`]. Below is a table of
+    /// the color spaces and their components:
     ///
-    /// |       Color space       |     C1    |     C2     |     C3    |   C4   |
-    /// |-------------------------|-----------|------------|-----------|--------|
-    /// | [`luma`]($color.luma)   | Lightness |            |           |        |
-    /// | [`oklab`]($color.oklab) | Lightness |    `a`     |    `b`    |  Alpha |
-    /// | [`oklch`]($color.oklch) | Lightness |   Chroma   |    Hue    |  Alpha |
-    /// | [`linear-rgb`]($color.linear-rgb) | Red  |   Green |    Blue |  Alpha |
-    /// | [`rgb`]($color.rgb)     |    Red    |   Green    |    Blue   |  Alpha |
-    /// | [`cmyk`]($color.cmyk)   |    Cyan   |   Magenta  |   Yellow  |  Key   |
-    /// | [`hsl`]($color.hsl)     |     Hue   | Saturation | Lightness |  Alpha |
-    /// | [`hsv`]($color.hsv)     |     Hue   | Saturation |   Value   |  Alpha |
+    /// #docs-table(
+    ///   table.header[Color space][C1][C2][C3][C4],
+    ///
+    ///   [@color.luma[`luma`]],
+    ///   [Lightness],
+    ///   [],
+    ///   [],
+    ///   [],
+    ///
+    ///   [@color.oklab[`oklab`]],
+    ///   [Lightness],
+    ///   [`a`],
+    ///   [`b`],
+    ///   [Alpha],
+    ///
+    ///   [@color.oklch[`oklch`]],
+    ///   [Lightness],
+    ///   [Chroma],
+    ///   [Hue],
+    ///   [Alpha],
+    ///
+    ///   [@color.linear-rgb[`linear-rgb`]],
+    ///   [Red],
+    ///   [Green],
+    ///   [Blue],
+    ///   [Alpha],
+    ///
+    ///   [@color.rgb[`rgb`]],
+    ///   [Red],
+    ///   [Green],
+    ///   [Blue],
+    ///   [Alpha],
+    ///
+    ///   [@color.cmyk[`cmyk`]],
+    ///   [Cyan],
+    ///   [Magenta],
+    ///   [Yellow],
+    ///   [Key],
+    ///
+    ///   [@color.hsl[`hsl`]],
+    ///   [Hue],
+    ///   [Saturation],
+    ///   [Lightness],
+    ///   [Alpha],
+    ///
+    ///   [@color.hsv[`hsv`]],
+    ///   [Hue],
+    ///   [Saturation],
+    ///   [Value],
+    ///   [Alpha],
+    ///
+    ///   [@color.spot[`spot`]],
+    ///   [Tint],
+    ///   none,
+    ///   none,
+    ///   none,
+    /// )
     ///
     /// For the meaning and type of each individual value, see the documentation
     /// of the corresponding color space. The alpha component is optional and
@@ -723,12 +869,590 @@ impl Color {
     /// ```
     #[func]
     pub fn components(
-        self,
+        &self,
         /// Whether to include the alpha component.
         #[named]
         #[default(true)]
         alpha: bool,
     ) -> Array {
+        match self {
+            Self::Process(c) => c.components(alpha),
+            Self::Spot(c) => array![c.tint],
+        }
+    }
+
+    /// Returns the constructor function for this color's space.
+    ///
+    /// Returns one of:
+    /// - @color.luma[`luma`]
+    /// - @color.oklab[`oklab`]
+    /// - @color.oklch[`oklch`]
+    /// - @color.linear-rgb[`linear-rgb`]
+    /// - @color.rgb[`rgb`]
+    /// - @color.cmyk[`cmyk`]
+    /// - @color.hsl[`hsl`]
+    /// - @color.hsv[`hsv`]
+    ///
+    /// ```example
+    /// #let color = cmyk(1%, 2%, 3%, 4%)
+    /// #(color.space() == cmyk)
+    /// ```
+    #[func]
+    pub fn space(&self) -> ColorSpace {
+        match self {
+            Self::Process(c) => c.space().into(),
+            Self::Spot(c) => ColorSpace::Spot(c.colorant.as_ref().clone()),
+        }
+    }
+
+    /// Returns the color's RGB(A) hex representation (such as `#ffaa32` or
+    /// `#020304fe`). The alpha component (last two digits in `#020304fe`) is
+    /// omitted if it is equal to `ff` (255 / 100%).
+    #[func]
+    pub fn to_hex(&self) -> EcoString {
+        match self {
+            Self::Process(c) => c.to_hex(),
+            Self::Spot(c) => c.fallback().to_hex(),
+        }
+    }
+
+    /// Lightens a color by a given factor.
+    #[func]
+    pub fn lighten(
+        &self,
+        /// The factor to lighten the color by.
+        factor: Ratio,
+    ) -> Color {
+        match self {
+            Self::Process(c) => Self::Process(c.lighten(factor)),
+            Self::Spot(c) => Self::Spot(c.lighten(factor)),
+        }
+    }
+
+    /// Darkens a color by a given factor.
+    #[func]
+    pub fn darken(
+        &self,
+        /// The factor to darken the color by.
+        factor: Ratio,
+    ) -> Color {
+        match self {
+            Self::Process(c) => Self::Process(c.darken(factor)),
+            Self::Spot(c) => Self::Spot(c.darken(factor)),
+        }
+    }
+
+    /// Increases the saturation of a color by a given factor.
+    ///
+    /// Only process colors can be saturated. If you want to saturate a spot
+    /// color, convert it into a process color first.
+    #[func]
+    pub fn saturate(
+        &self,
+        span: Span,
+        /// The factor to saturate the color by.
+        factor: Ratio,
+    ) -> SourceResult<Color> {
+        Ok(match self {
+            Self::Process(c) => Self::Process(c.saturate(span, factor)?),
+            Self::Spot(_) => bail!(
+                span,
+                "cannot saturate spot color";
+                hint: "try using the fallback color instead";
+            ),
+        })
+    }
+
+    /// Decreases the saturation of a color by a given factor.
+    ///
+    /// Only process colors can be desaturated. If you want to desaturate a spot
+    /// color, convert it into a process color first.
+    #[func]
+    pub fn desaturate(
+        &self,
+        span: Span,
+        /// The factor to desaturate the color by.
+        factor: Ratio,
+    ) -> SourceResult<Color> {
+        Ok(match self {
+            Self::Process(c) => Self::Process(c.desaturate(span, factor)?),
+            Self::Spot(_) => bail!(
+                span,
+                "cannot desaturate spot color";
+                hint: "try using the fallback color instead";
+            ),
+        })
+    }
+
+    /// Produces the complementary color using a provided color space. You can
+    /// think of it as the opposite side on a color wheel.
+    ///
+    /// ```example
+    /// #square(fill: yellow)
+    /// #square(fill: yellow.negate())
+    /// #square(fill: yellow.negate(space: rgb))
+    /// ```
+    #[func]
+    pub fn negate(
+        &self,
+        /// The color space used for the transformation. By default, a
+        /// perceptual color space is used.
+        #[named]
+        #[default]
+        space: Smart<ColorSpace>,
+    ) -> HintedStrResult<Color> {
+        let target_space = space.unwrap_or_else(|| match self.space() {
+            ColorSpace::Process(_) => ColorSpace::Process(ProcessColorSpace::Oklab),
+            ColorSpace::Spot(s) => ColorSpace::Spot(s),
+        });
+
+        let result = match self.to_space(&target_space)? {
+            Self::Process(c) => Self::Process(c.negate(c.space())),
+            Self::Spot(c) => Self::Spot(c.negate()),
+        };
+        result.to_space(&self.space())
+    }
+
+    /// Rotates the hue of the color by a given angle.
+    ///
+    /// This function only works on color models with a well-defined hue
+    /// component, i.e. Oklch, HSL, and HSV.
+    #[func]
+    pub fn rotate(
+        &self,
+        span: Span,
+        /// The angle to rotate the hue by.
+        angle: Angle,
+        /// The color space used to rotate. By default, this happens in a
+        /// perceptual color space (@color.oklch[`oklch`]).
+        #[named]
+        #[default(ProcessColorSpace::Oklch)]
+        space: ProcessColorSpace,
+    ) -> SourceResult<Color> {
+        Ok(match space {
+            ProcessColorSpace::Oklch => {
+                let oklch = self.to_oklch();
+                let rotated = oklch.shift_hue(angle.to_deg() as f32);
+                Self::Process(ProcessColor::Oklch(rotated))
+                    .to_space(&self.space())
+                    .at(span)?
+            }
+            ProcessColorSpace::Hsl => {
+                let hsl = self.to_hsl();
+                let rotated = hsl.shift_hue(angle.to_deg() as f32);
+                Self::Process(ProcessColor::Hsl(rotated))
+                    .to_space(&self.space())
+                    .at(span)?
+            }
+            ProcessColorSpace::Hsv => {
+                let hsv = self.to_hsv();
+                let rotated = hsv.shift_hue(angle.to_deg() as f32);
+                Self::Process(ProcessColor::Hsv(rotated))
+                    .to_space(&self.space())
+                    .at(span)?
+            }
+            _ => bail!(span, "this color space does not support hue rotation"),
+        })
+    }
+
+    /// Create a color by mixing two or more colors.
+    ///
+    /// In color spaces with a hue component (HSL, HSV, Oklch), only two colors
+    /// can be mixed at once. Mixing more than two colors in such a space will
+    /// result in an error!
+    ///
+    /// ```example
+    /// #set block(height: 20pt, width: 100%)
+    /// #block(fill: red.mix(blue))
+    /// #block(fill: red.mix(blue, space: rgb))
+    /// #block(fill: color.mix(red, blue, white))
+    /// #block(fill: color.mix((red, 70%), (blue, 30%)))
+    /// ```
+    #[func]
+    pub fn mix(
+        /// The colors, optionally with weights, specified as a pair (array of
+        /// length two) of color and weight (float or ratio).
+        ///
+        /// The weights do not need to add to `{100%}`, they are relative to the
+        /// sum of all weights.
+        #[variadic]
+        colors: Vec<WeightedColor>,
+        /// The color space to mix in. By default, this happens in a perceptual
+        /// color space (@color.oklab[`oklab`]) or, if all colors use the same
+        /// spot colorant, using that colorant.
+        ///
+        /// All colors will be converted into this color space.
+        #[named]
+        #[default]
+        space: Smart<ColorSpace>,
+    ) -> HintedStrResult<Color> {
+        Self::mix_iter(colors, space)
+    }
+
+    /// Makes a color more transparent by a given factor.
+    ///
+    /// This method is relative to the existing alpha value. If the scale is
+    /// positive, calculates `alpha - alpha * scale`. Negative scales behave
+    /// like `color.opacify(-scale)`.
+    ///
+    /// ```example
+    /// #block(fill: red)[opaque]
+    /// #block(fill: red.transparentize(50%))[half red]
+    /// #block(fill: red.transparentize(75%))[quarter red]
+    /// ```
+    #[func]
+    pub fn transparentize(
+        &self,
+        /// The factor to change the alpha value by.
+        scale: Ratio,
+    ) -> StrResult<Color> {
+        self.scale_alpha(-scale)
+    }
+
+    /// Makes a color more opaque by a given scale.
+    ///
+    /// This method is relative to the existing alpha value. If the scale is
+    /// positive, calculates `alpha + scale - alpha * scale`. Negative scales
+    /// behave like `color.transparentize(-scale)`.
+    ///
+    /// ```example
+    /// #let half-red = red.transparentize(50%)
+    /// #block(fill: half-red.opacify(100%))[opaque]
+    /// #block(fill: half-red.opacify(50%))[three quarters red]
+    /// #block(fill: half-red.opacify(-50%))[one quarter red]
+    /// ```
+    #[func]
+    pub fn opacify(
+        &self,
+        /// The scale to change the alpha value by.
+        scale: Ratio,
+    ) -> StrResult<Color> {
+        self.scale_alpha(scale)
+    }
+
+    type SpotColorant;
+}
+
+impl Color {
+    /// Same as [`Color::mix`], but takes an iterator instead of a vector.
+    pub fn mix_iter(
+        colors: impl IntoIterator<
+            Item = WeightedColor,
+            IntoIter = impl ExactSizeIterator<Item = WeightedColor>,
+        > + Clone,
+        space: Smart<ColorSpace>,
+    ) -> HintedStrResult<Color> {
+        let space =
+            resolve_color_space(space, colors.clone().into_iter().map(|wc| wc.color));
+
+        let mut colors = colors.into_iter();
+        if space.hue_index().is_some() && colors.len() > 2 {
+            bail!("cannot mix more than two colors in a hue-based space");
+        }
+
+        let m = if space.hue_index().is_some() && colors.len() == 2 {
+            let mut m = [0.0; 4];
+
+            let WeightedColor { color: c0, weight: w0 } = colors.next().unwrap();
+            let WeightedColor { color: c1, weight: w1 } = colors.next().unwrap();
+
+            let c0 = c0.to_space(&space)?.to_vec4();
+            let c1 = c1.to_space(&space)?.to_vec4();
+            let w0 = w0 as f32;
+            let w1 = w1 as f32;
+
+            if w0 + w1 <= 0.0 {
+                bail!("sum of weights must be positive");
+            }
+
+            for i in 0..4 {
+                m[i] = (w0 * c0[i] + w1 * c1[i]) / (w0 + w1);
+            }
+
+            // Ensure that the hue circle is traversed in the short direction.
+            if let Some(index) = space.hue_index()
+                && (c0[index] - c1[index]).abs() > 180.0
+            {
+                let (h0, h1) = if c0[index] < c1[index] {
+                    (c0[index] + 360.0, c1[index])
+                } else {
+                    (c0[index], c1[index] + 360.0)
+                };
+                m[index] = (w0 * h0 + w1 * h1) / (w0 + w1);
+            }
+
+            m
+        } else {
+            let mut total = 0.0;
+            let mut acc = [0.0; 4];
+
+            for WeightedColor { color, weight } in colors {
+                let weight = weight as f32;
+                let v = color.to_space(&space)?.to_vec4();
+                acc[0] += weight * v[0];
+                acc[1] += weight * v[1];
+                acc[2] += weight * v[2];
+                acc[3] += weight * v[3];
+                total += weight;
+            }
+
+            if total <= 0.0 {
+                bail!("sum of weights must be positive");
+            }
+
+            acc.map(|v| v / total)
+        };
+
+        Ok(match space {
+            ColorSpace::Process(ProcessColorSpace::Oklab) => {
+                Color::Process(ProcessColor::Oklab(Oklab::new(m[0], m[1], m[2], m[3])))
+            }
+            ColorSpace::Process(ProcessColorSpace::Oklch) => {
+                Color::Process(ProcessColor::Oklch(Oklch::new(m[0], m[1], m[2], m[3])))
+            }
+            ColorSpace::Process(ProcessColorSpace::Srgb) => {
+                Color::Process(ProcessColor::Rgb(Rgb::new(m[0], m[1], m[2], m[3])))
+            }
+            ColorSpace::Process(ProcessColorSpace::LinearRgb) => Color::Process(
+                ProcessColor::LinearRgb(LinearRgb::new(m[0], m[1], m[2], m[3])),
+            ),
+            ColorSpace::Process(ProcessColorSpace::Hsl) => Color::Process(
+                ProcessColor::Hsl(Hsl::new(RgbHue::from_degrees(m[0]), m[1], m[2], m[3])),
+            ),
+            ColorSpace::Process(ProcessColorSpace::Hsv) => Color::Process(
+                ProcessColor::Hsv(Hsv::new(RgbHue::from_degrees(m[0]), m[1], m[2], m[3])),
+            ),
+            ColorSpace::Process(ProcessColorSpace::Cmyk) => {
+                Color::Process(ProcessColor::Cmyk(Cmyk::new(m[0], m[1], m[2], m[3])))
+            }
+            ColorSpace::Process(ProcessColorSpace::D65Gray) => {
+                Color::Process(ProcessColor::Luma(Luma::new(m[0], m[3])))
+            }
+            ColorSpace::Spot(colorant) => Color::Spot(SpotColor::new(
+                Arc::new(colorant),
+                Ratio::new(m[0].clamp(0.0, 1.0) as f64),
+            )),
+        })
+    }
+
+    /// Construct a new RGBA color from 8-bit values.
+    pub fn from_u8(r: u8, g: u8, b: u8, a: u8) -> Self {
+        Self::Process(ProcessColor::from_u8(r, g, b, a))
+    }
+
+    /// Converts a 32-bit integer to an RGBA color.
+    pub fn from_u32(color: u32) -> Self {
+        Self::Process(ProcessColor::from_u32(color))
+    }
+
+    /// Returns the alpha channel of the color, if it has one.
+    pub fn alpha(&self) -> Option<f32> {
+        match self {
+            Color::Process(c) => c.alpha(),
+            Color::Spot(_) => None,
+        }
+    }
+
+    /// Sets the alpha channel of the color, if it has one.
+    pub fn with_alpha(self, alpha: f32) -> Self {
+        match self {
+            Color::Process(c) => c.with_alpha(alpha).into(),
+            Color::Spot(_) => self,
+        }
+    }
+
+    /// Scales the alpha value of a color by a given amount.
+    ///
+    /// For positive scales, computes `alpha + scale - alpha * scale`. For
+    /// non-positive scales, computes `alpha + alpha * scale`.
+    ///
+    /// Note that this function will fail for colors in a color space without an
+    /// alpha component.
+    fn scale_alpha(&self, scale: Ratio) -> StrResult<Self> {
+        Ok(match self {
+            Color::Process(c) => c.scale_alpha(scale)?.into(),
+            Color::Spot(_) => bail!("spot colors do not have an alpha component"),
+        })
+    }
+
+    /// Converts the color to a vec of four floats.
+    pub fn to_vec4(&self) -> [f32; 4] {
+        match self {
+            Color::Process(c) => c.to_vec4(),
+            Color::Spot(c) => [c.tint.get() as f32; 4],
+        }
+    }
+
+    /// Converts the color to a vec of four [`u8`]s.
+    pub fn to_vec4_u8(&self) -> [u8; 4] {
+        self.to_vec4().map(|x| (x * 255.0).round() as u8)
+    }
+
+    pub fn to_space(&self, space: &ColorSpace) -> HintedStrResult<Self> {
+        Ok(match (space, self) {
+            (ColorSpace::Process(s), Self::Process(c)) => c.to_space(*s).into(),
+            (ColorSpace::Process(s), Self::Spot(c)) => c.fallback().to_space(*s).into(),
+            (ColorSpace::Spot(s), Self::Spot(c)) => {
+                if s == c.colorant.as_ref() {
+                    self.clone()
+                } else {
+                    bail!(
+                        "cannot convert spot color to different spot colorant";
+                        hint: "colorant of the color is `{}`", c.colorant.name.repr();
+                        hint: "colorant of the color space is `{}`", s.name.repr();
+                    )
+                }
+            }
+            (ColorSpace::Spot(s), Self::Process(_)) => {
+                bail!(
+                    "cannot convert process color to spot colorant space";
+                    hint: "process color cannot be expressed in spot colorant `{}`", s.name.repr();
+                    hint: "try converting the spot color to the process space instead";
+                )
+            }
+        })
+    }
+
+    pub fn to_process_space(&self, space: ProcessColorSpace) -> Self {
+        match self {
+            Self::Process(c) => c.to_space(space).into(),
+            Self::Spot(c) => c.fallback().to_space(space).into(),
+        }
+    }
+
+    pub fn to_luma(&self) -> Luma {
+        match self {
+            Self::Process(c) => c.to_luma(),
+            Self::Spot(c) => c.fallback().to_luma(),
+        }
+    }
+
+    pub fn to_oklab(&self) -> Oklab {
+        match self {
+            Self::Process(c) => c.to_oklab(),
+            Self::Spot(c) => c.fallback().to_oklab(),
+        }
+    }
+
+    pub fn to_oklch(&self) -> Oklch {
+        match self {
+            Self::Process(c) => c.to_oklch(),
+            Self::Spot(c) => c.fallback().to_oklch(),
+        }
+    }
+
+    pub fn to_rgb(&self) -> Rgb {
+        match self {
+            Self::Process(c) => c.to_rgb(),
+            Self::Spot(c) => c.fallback().to_rgb(),
+        }
+    }
+
+    pub fn to_linear_rgb(&self) -> LinearRgb {
+        match self {
+            Self::Process(c) => c.to_linear_rgb(),
+            Self::Spot(c) => c.fallback().to_linear_rgb(),
+        }
+    }
+
+    pub fn to_cmyk(&self) -> Cmyk {
+        match self {
+            Self::Process(c) => c.to_cmyk(),
+            Self::Spot(c) => c.fallback().to_cmyk(),
+        }
+    }
+
+    pub fn to_hsl(&self) -> Hsl {
+        match self {
+            Self::Process(c) => c.to_hsl(),
+            Self::Spot(c) => c.fallback().to_hsl(),
+        }
+    }
+
+    pub fn to_hsv(&self) -> Hsv {
+        match self {
+            Self::Process(c) => c.to_hsv(),
+            Self::Spot(c) => c.fallback().to_hsv(),
+        }
+    }
+
+    /// Convert to `ProcessColor`, using fallback for spot colors.
+    ///
+    /// This is useful for rendering and export where spot colors cannot be
+    /// expressed and need to be converted to their fallback representation.
+    pub fn to_process(&self) -> ProcessColor {
+        match self {
+            Self::Process(c) => *c,
+            Self::Spot(c) => c.fallback(),
+        }
+    }
+}
+
+impl Debug for Color {
+    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
+        match self {
+            Self::Process(c) => Debug::fmt(c, f),
+            Self::Spot(c) => Debug::fmt(c, f),
+        }
+    }
+}
+
+impl Repr for Color {
+    fn repr(&self) -> EcoString {
+        match self {
+            Self::Process(c) => Repr::repr(c),
+            Self::Spot(c) => Repr::repr(c),
+        }
+    }
+}
+
+impl FromStr for Color {
+    type Err = &'static str;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        Ok(ProcessColor::from_str(s)?.into())
+    }
+}
+
+impl<C> From<C> for Color
+where
+    C: Into<ProcessColor>,
+{
+    fn from(color: C) -> Self {
+        Self::Process(color.into())
+    }
+}
+
+impl From<SpotColor> for Color {
+    fn from(c: SpotColor) -> Self {
+        Self::Spot(c)
+    }
+}
+
+/// Colors with a well-defined color space.
+#[derive(Copy, Clone)]
+pub enum ProcessColor {
+    /// A 32-bit luma color.
+    Luma(Luma),
+    /// A 32-bit L\*a\*b\* color in the Oklab color space.
+    Oklab(Oklab),
+    /// A 32-bit LCh color in the Oklab color space.
+    Oklch(Oklch),
+    /// A 32-bit RGB color.
+    Rgb(Rgb),
+    /// A 32-bit linear RGB color.
+    LinearRgb(LinearRgb),
+    /// A 32-bit CMYK color.
+    Cmyk(Cmyk),
+    /// A 32-bit HSL color.
+    Hsl(Hsl),
+    /// A 32-bit HSV color.
+    Hsv(Hsv),
+}
+
+impl ProcessColor {
+    /// Extracts the components of this color.
+    pub fn components(self, alpha: bool) -> Array {
         let mut components = match self {
             Self::Luma(c) => {
                 array![Ratio::new(c.luma.into()), Ratio::new(c.alpha.into())]
@@ -797,54 +1521,32 @@ impl Color {
         components
     }
 
-    /// Returns the constructor function for this color's space:
-    /// - [`luma`]($color.luma)
-    /// - [`oklab`]($color.oklab)
-    /// - [`oklch`]($color.oklch)
-    /// - [`linear-rgb`]($color.linear-rgb)
-    /// - [`rgb`]($color.rgb)
-    /// - [`cmyk`]($color.cmyk)
-    /// - [`hsl`]($color.hsl)
-    /// - [`hsv`]($color.hsv)
-    ///
-    /// ```example
-    /// #let color = cmyk(1%, 2%, 3%, 4%)
-    /// #(color.space() == cmyk)
-    /// ```
-    #[func]
-    pub fn space(self) -> ColorSpace {
-        match self {
-            Self::Luma(_) => ColorSpace::D65Gray,
-            Self::Oklab(_) => ColorSpace::Oklab,
-            Self::Oklch(_) => ColorSpace::Oklch,
-            Self::LinearRgb(_) => ColorSpace::LinearRgb,
-            Self::Rgb(_) => ColorSpace::Srgb,
-            Self::Cmyk(_) => ColorSpace::Cmyk,
-            Self::Hsl(_) => ColorSpace::Hsl,
-            Self::Hsv(_) => ColorSpace::Hsv,
+    /// Returns the color's RGB(A) hex representation.
+    pub fn to_hex(&self) -> EcoString {
+        let (r, g, b, a) = self.to_rgb().into_format::<u8, u8>().into_components();
+        if a != 255 {
+            eco_format!("#{r:02x}{g:02x}{b:02x}{a:02x}")
+        } else {
+            eco_format!("#{r:02x}{g:02x}{b:02x}")
         }
     }
 
-    /// Returns the color's RGB(A) hex representation (such as `#ffaa32` or
-    /// `#020304fe`). The alpha component (last two digits in `#020304fe`) is
-    /// omitted if it is equal to `ff` (255 / 100%).
-    #[func]
-    pub fn to_hex(self) -> EcoString {
-        let [r, g, b, a] = self.to_rgb().to_vec4_u8();
-        if a != 255 {
-            eco_format!("#{:02x}{:02x}{:02x}{:02x}", r, g, b, a)
-        } else {
-            eco_format!("#{:02x}{:02x}{:02x}", r, g, b)
+    /// Returns the constructor function for this color's space.
+    pub fn space(self) -> ProcessColorSpace {
+        match self {
+            Self::Luma(_) => ProcessColorSpace::D65Gray,
+            Self::Oklab(_) => ProcessColorSpace::Oklab,
+            Self::Oklch(_) => ProcessColorSpace::Oklch,
+            Self::LinearRgb(_) => ProcessColorSpace::LinearRgb,
+            Self::Rgb(_) => ProcessColorSpace::Srgb,
+            Self::Cmyk(_) => ProcessColorSpace::Cmyk,
+            Self::Hsl(_) => ProcessColorSpace::Hsl,
+            Self::Hsv(_) => ProcessColorSpace::Hsv,
         }
     }
 
     /// Lightens a color by a given factor.
-    #[func]
-    pub fn lighten(
-        self,
-        /// The factor to lighten the color by.
-        factor: Ratio,
-    ) -> Color {
+    pub fn lighten(self, factor: Ratio) -> ProcessColor {
         let factor = factor.get() as f32;
         match self {
             Self::Luma(c) => Self::Luma(c.lighten(factor)),
@@ -859,12 +1561,7 @@ impl Color {
     }
 
     /// Darkens a color by a given factor.
-    #[func]
-    pub fn darken(
-        self,
-        /// The factor to darken the color by.
-        factor: Ratio,
-    ) -> Color {
+    pub fn darken(self, factor: Ratio) -> ProcessColor {
         let factor = factor.get() as f32;
         match self {
             Self::Luma(c) => Self::Luma(c.darken(factor)),
@@ -879,71 +1576,47 @@ impl Color {
     }
 
     /// Increases the saturation of a color by a given factor.
-    #[func]
-    pub fn saturate(
-        self,
-        span: Span,
-        /// The factor to saturate the color by.
-        factor: Ratio,
-    ) -> SourceResult<Color> {
+    pub fn saturate(self, span: Span, factor: Ratio) -> SourceResult<ProcessColor> {
+        let f = factor.get() as f32;
         Ok(match self {
-            Self::Luma(_) => {
-                bail!(
-                    span, "cannot saturate grayscale color";
-                    hint: "try converting your color to RGB first"
-                );
+            Self::Luma(_) => bail!(
+                span, "cannot saturate grayscale color";
+                hint: "try converting your color to RGB first";
+            ),
+            Self::Hsl(c) => Self::Hsl(c.saturate(f)),
+            Self::Hsv(c) => Self::Hsv(c.saturate(f)),
+            Self::Oklab(_)
+            | Self::Oklch(_)
+            | Self::LinearRgb(_)
+            | Self::Rgb(_)
+            | Self::Cmyk(_) => {
+                Self::Hsv(self.to_hsv().saturate(f)).to_space(self.space())
             }
-            Self::Oklab(_) => self.to_hsv().saturate(span, factor)?.to_oklab(),
-            Self::Oklch(_) => self.to_hsv().saturate(span, factor)?.to_oklch(),
-            Self::LinearRgb(_) => self.to_hsv().saturate(span, factor)?.to_linear_rgb(),
-            Self::Rgb(_) => self.to_hsv().saturate(span, factor)?.to_rgb(),
-            Self::Cmyk(_) => self.to_hsv().saturate(span, factor)?.to_cmyk(),
-            Self::Hsl(c) => Self::Hsl(c.saturate(factor.get() as f32)),
-            Self::Hsv(c) => Self::Hsv(c.saturate(factor.get() as f32)),
         })
     }
 
     /// Decreases the saturation of a color by a given factor.
-    #[func]
-    pub fn desaturate(
-        self,
-        span: Span,
-        /// The factor to desaturate the color by.
-        factor: Ratio,
-    ) -> SourceResult<Color> {
+    pub fn desaturate(self, span: Span, factor: Ratio) -> SourceResult<ProcessColor> {
+        let f = factor.get() as f32;
         Ok(match self {
-            Self::Luma(_) => {
-                bail!(
-                    span, "cannot desaturate grayscale color";
-                    hint: "try converting your color to RGB first"
-                );
+            Self::Luma(_) => bail!(
+                span, "cannot desaturate grayscale color";
+                hint: "try converting your color to RGB first";
+            ),
+            Self::Hsl(c) => Self::Hsl(c.desaturate(f)),
+            Self::Hsv(c) => Self::Hsv(c.desaturate(f)),
+            Self::Oklab(_)
+            | Self::Oklch(_)
+            | Self::LinearRgb(_)
+            | Self::Rgb(_)
+            | Self::Cmyk(_) => {
+                Self::Hsv(self.to_hsv().desaturate(f)).to_space(self.space())
             }
-            Self::Oklab(_) => self.to_hsv().desaturate(span, factor)?.to_oklab(),
-            Self::Oklch(_) => self.to_hsv().desaturate(span, factor)?.to_oklch(),
-            Self::LinearRgb(_) => self.to_hsv().desaturate(span, factor)?.to_linear_rgb(),
-            Self::Rgb(_) => self.to_hsv().desaturate(span, factor)?.to_rgb(),
-            Self::Cmyk(_) => self.to_hsv().desaturate(span, factor)?.to_cmyk(),
-            Self::Hsl(c) => Self::Hsl(c.desaturate(factor.get() as f32)),
-            Self::Hsv(c) => Self::Hsv(c.desaturate(factor.get() as f32)),
         })
     }
 
     /// Produces the complementary color using a provided color space.
-    /// You can think of it as the opposite side on a color wheel.
-    ///
-    /// ```example
-    /// #square(fill: yellow)
-    /// #square(fill: yellow.negate())
-    /// #square(fill: yellow.negate(space: rgb))
-    /// ```
-    #[func]
-    pub fn negate(
-        self,
-        /// The color space used for the transformation. By default, a perceptual color space is used.
-        #[named]
-        #[default(ColorSpace::Oklab)]
-        space: ColorSpace,
-    ) -> Color {
+    pub fn negate(self, space: ProcessColorSpace) -> ProcessColor {
         let result = match self.to_space(space) {
             Self::Luma(c) => Self::Luma(Luma::new(1.0 - c.luma, c.alpha)),
             Self::Oklab(c) => Self::Oklab(Oklab::new(1.0 - c.l, -c.a, -c.b, c.alpha)),
@@ -979,203 +1652,6 @@ impl Color {
         result.to_space(self.space())
     }
 
-    /// Rotates the hue of the color by a given angle.
-    #[func]
-    pub fn rotate(
-        self,
-        span: Span,
-        /// The angle to rotate the hue by.
-        angle: Angle,
-        /// The color space used to rotate. By default, this happens in a perceptual
-        /// color space ([`oklch`]($color.oklch)).
-        #[named]
-        #[default(ColorSpace::Oklch)]
-        space: ColorSpace,
-    ) -> SourceResult<Color> {
-        Ok(match space {
-            ColorSpace::Oklch => {
-                let Self::Oklch(oklch) = self.to_oklch() else {
-                    unreachable!();
-                };
-                let rotated = oklch.shift_hue(angle.to_deg() as f32);
-                Self::Oklch(rotated).to_space(self.space())
-            }
-            ColorSpace::Hsl => {
-                let Self::Hsl(hsl) = self.to_hsl() else {
-                    unreachable!();
-                };
-                let rotated = hsl.shift_hue(angle.to_deg() as f32);
-                Self::Hsl(rotated).to_space(self.space())
-            }
-            ColorSpace::Hsv => {
-                let Self::Hsv(hsv) = self.to_hsv() else {
-                    unreachable!();
-                };
-                let rotated = hsv.shift_hue(angle.to_deg() as f32);
-                Self::Hsv(rotated).to_space(self.space())
-            }
-            _ => bail!(span, "this colorspace does not support hue rotation"),
-        })
-    }
-
-    /// Create a color by mixing two or more colors.
-    ///
-    /// In color spaces with a hue component (hsl, hsv, oklch), only two colors
-    /// can be mixed at once. Mixing more than two colors in such a space will
-    /// result in an error!
-    ///
-    /// ```example
-    /// #set block(height: 20pt, width: 100%)
-    /// #block(fill: red.mix(blue))
-    /// #block(fill: red.mix(blue, space: rgb))
-    /// #block(fill: color.mix(red, blue, white))
-    /// #block(fill: color.mix((red, 70%), (blue, 30%)))
-    /// ```
-    #[func]
-    pub fn mix(
-        /// The colors, optionally with weights, specified as a pair (array of
-        /// length two) of color and weight (float or ratio).
-        ///
-        /// The weights do not need to add to `{100%}`, they are relative to the
-        /// sum of all weights.
-        #[variadic]
-        colors: Vec<WeightedColor>,
-        /// The color space to mix in. By default, this happens in a perceptual
-        /// color space ([`oklab`]($color.oklab)).
-        #[named]
-        #[default(ColorSpace::Oklab)]
-        space: ColorSpace,
-    ) -> StrResult<Color> {
-        Self::mix_iter(colors, space)
-    }
-
-    /// Makes a color more transparent by a given factor.
-    ///
-    /// This method is relative to the existing alpha value.
-    /// If the scale is positive, calculates `alpha - alpha * scale`.
-    /// Negative scales behave like `color.opacify(-scale)`.
-    ///
-    /// ```example
-    /// #block(fill: red)[opaque]
-    /// #block(fill: red.transparentize(50%))[half red]
-    /// #block(fill: red.transparentize(75%))[quarter red]
-    /// ```
-    #[func]
-    pub fn transparentize(
-        self,
-        /// The factor to change the alpha value by.
-        scale: Ratio,
-    ) -> StrResult<Color> {
-        self.scale_alpha(-scale)
-    }
-
-    /// Makes a color more opaque by a given scale.
-    ///
-    /// This method is relative to the existing alpha value.
-    /// If the scale is positive, calculates `alpha + scale - alpha * scale`.
-    /// Negative scales behave like `color.transparentize(-scale)`.
-    ///
-    /// ```example
-    /// #let half-red = red.transparentize(50%)
-    /// #block(fill: half-red.opacify(100%))[opaque]
-    /// #block(fill: half-red.opacify(50%))[three quarters red]
-    /// #block(fill: half-red.opacify(-50%))[one quarter red]
-    /// ```
-    #[func]
-    pub fn opacify(
-        self,
-        /// The scale to change the alpha value by.
-        scale: Ratio,
-    ) -> StrResult<Color> {
-        self.scale_alpha(scale)
-    }
-}
-
-impl Color {
-    /// Same as [`Color::mix`], but takes an iterator instead of a vector.
-    pub fn mix_iter(
-        colors: impl IntoIterator<
-            Item = WeightedColor,
-            IntoIter = impl ExactSizeIterator<Item = WeightedColor>,
-        >,
-        space: ColorSpace,
-    ) -> StrResult<Color> {
-        let mut colors = colors.into_iter();
-        if space.hue_index().is_some() && colors.len() > 2 {
-            bail!("cannot mix more than two colors in a hue-based space");
-        }
-
-        let m = if space.hue_index().is_some() && colors.len() == 2 {
-            let mut m = [0.0; 4];
-
-            let WeightedColor { color: c0, weight: w0 } = colors.next().unwrap();
-            let WeightedColor { color: c1, weight: w1 } = colors.next().unwrap();
-
-            let c0 = c0.to_space(space).to_vec4();
-            let c1 = c1.to_space(space).to_vec4();
-            let w0 = w0 as f32;
-            let w1 = w1 as f32;
-
-            if w0 + w1 <= 0.0 {
-                bail!("sum of weights must be positive");
-            }
-
-            for i in 0..4 {
-                m[i] = (w0 * c0[i] + w1 * c1[i]) / (w0 + w1);
-            }
-
-            // Ensure that the hue circle is traversed in the short direction.
-            if let Some(index) = space.hue_index() {
-                if (c0[index] - c1[index]).abs() > 180.0 {
-                    let (h0, h1) = if c0[index] < c1[index] {
-                        (c0[index] + 360.0, c1[index])
-                    } else {
-                        (c0[index], c1[index] + 360.0)
-                    };
-                    m[index] = (w0 * h0 + w1 * h1) / (w0 + w1);
-                }
-            }
-
-            m
-        } else {
-            let mut total = 0.0;
-            let mut acc = [0.0; 4];
-
-            for WeightedColor { color, weight } in colors {
-                let weight = weight as f32;
-                let v = color.to_space(space).to_vec4();
-                acc[0] += weight * v[0];
-                acc[1] += weight * v[1];
-                acc[2] += weight * v[2];
-                acc[3] += weight * v[3];
-                total += weight;
-            }
-
-            if total <= 0.0 {
-                bail!("sum of weights must be positive");
-            }
-
-            acc.map(|v| v / total)
-        };
-
-        Ok(match space {
-            ColorSpace::Oklab => Color::Oklab(Oklab::new(m[0], m[1], m[2], m[3])),
-            ColorSpace::Oklch => Color::Oklch(Oklch::new(m[0], m[1], m[2], m[3])),
-            ColorSpace::Srgb => Color::Rgb(Rgb::new(m[0], m[1], m[2], m[3])),
-            ColorSpace::LinearRgb => {
-                Color::LinearRgb(LinearRgb::new(m[0], m[1], m[2], m[3]))
-            }
-            ColorSpace::Hsl => {
-                Color::Hsl(Hsl::new(RgbHue::from_degrees(m[0]), m[1], m[2], m[3]))
-            }
-            ColorSpace::Hsv => {
-                Color::Hsv(Hsv::new(RgbHue::from_degrees(m[0]), m[1], m[2], m[3]))
-            }
-            ColorSpace::Cmyk => Color::Cmyk(Cmyk::new(m[0], m[1], m[2], m[3])),
-            ColorSpace::D65Gray => Color::Luma(Luma::new(m[0], m[3])),
-        })
-    }
-
     /// Construct a new RGBA color from 8-bit values.
     pub fn from_u8(r: u8, g: u8, b: u8, a: u8) -> Self {
         Self::Rgb(Rgb::new(
@@ -1197,30 +1673,30 @@ impl Color {
     }
 
     /// Returns the alpha channel of the color, if it has one.
-    pub fn alpha(&self) -> Option<f32> {
+    pub fn alpha(self) -> Option<f32> {
         match self {
-            Color::Cmyk(_) => None,
-            Color::Luma(c) => Some(c.alpha),
-            Color::Oklab(c) => Some(c.alpha),
-            Color::Oklch(c) => Some(c.alpha),
-            Color::Rgb(c) => Some(c.alpha),
-            Color::LinearRgb(c) => Some(c.alpha),
-            Color::Hsl(c) => Some(c.alpha),
-            Color::Hsv(c) => Some(c.alpha),
+            Self::Cmyk(_) => None,
+            Self::Luma(c) => Some(c.alpha),
+            Self::Oklab(c) => Some(c.alpha),
+            Self::Oklch(c) => Some(c.alpha),
+            Self::Rgb(c) => Some(c.alpha),
+            Self::LinearRgb(c) => Some(c.alpha),
+            Self::Hsl(c) => Some(c.alpha),
+            Self::Hsv(c) => Some(c.alpha),
         }
     }
 
     /// Sets the alpha channel of the color, if it has one.
     pub fn with_alpha(mut self, alpha: f32) -> Self {
         match &mut self {
-            Color::Cmyk(_) => {}
-            Color::Luma(c) => c.alpha = alpha,
-            Color::Oklab(c) => c.alpha = alpha,
-            Color::Oklch(c) => c.alpha = alpha,
-            Color::Rgb(c) => c.alpha = alpha,
-            Color::LinearRgb(c) => c.alpha = alpha,
-            Color::Hsl(c) => c.alpha = alpha,
-            Color::Hsv(c) => c.alpha = alpha,
+            Self::Cmyk(_) => {}
+            Self::Luma(c) => c.alpha = alpha,
+            Self::Oklab(c) => c.alpha = alpha,
+            Self::Oklch(c) => c.alpha = alpha,
+            Self::Rgb(c) => c.alpha = alpha,
+            Self::LinearRgb(c) => c.alpha = alpha,
+            Self::Hsl(c) => c.alpha = alpha,
+            Self::Hsv(c) => c.alpha = alpha,
         }
 
         self
@@ -1230,7 +1706,7 @@ impl Color {
     ///
     /// For positive scales, computes `alpha + scale - alpha * scale`.
     /// For non-positive scales, computes `alpha + alpha * scale`.
-    fn scale_alpha(self, scale: Ratio) -> StrResult<Color> {
+    fn scale_alpha(self, scale: Ratio) -> StrResult<Self> {
         #[inline]
         fn transform<C>(mut color: Alpha<C, f32>, scale: Ratio) -> Alpha<C, f32> {
             let scale = scale.get() as f32;
@@ -1240,35 +1716,35 @@ impl Color {
         }
 
         Ok(match self {
-            Color::Luma(c) => Color::Luma(transform(c, scale)),
-            Color::Oklab(c) => Color::Oklab(transform(c, scale)),
-            Color::Oklch(c) => Color::Oklch(transform(c, scale)),
-            Color::Rgb(c) => Color::Rgb(transform(c, scale)),
-            Color::LinearRgb(c) => Color::LinearRgb(transform(c, scale)),
-            Color::Cmyk(_) => bail!("CMYK does not have an alpha component"),
-            Color::Hsl(c) => Color::Hsl(transform(c, scale)),
-            Color::Hsv(c) => Color::Hsv(transform(c, scale)),
+            Self::Luma(c) => Self::Luma(transform(c, scale)),
+            Self::Oklab(c) => Self::Oklab(transform(c, scale)),
+            Self::Oklch(c) => Self::Oklch(transform(c, scale)),
+            Self::Rgb(c) => Self::Rgb(transform(c, scale)),
+            Self::LinearRgb(c) => Self::LinearRgb(transform(c, scale)),
+            Self::Cmyk(_) => bail!("CMYK does not have an alpha component"),
+            Self::Hsl(c) => Self::Hsl(transform(c, scale)),
+            Self::Hsv(c) => Self::Hsv(transform(c, scale)),
         })
     }
 
     /// Converts the color to a vec of four floats.
-    pub fn to_vec4(&self) -> [f32; 4] {
+    pub fn to_vec4(self) -> [f32; 4] {
         match self {
-            Color::Luma(c) => [c.luma, c.luma, c.luma, c.alpha],
-            Color::Oklab(c) => [c.l, c.a, c.b, c.alpha],
-            Color::Oklch(c) => {
+            Self::Luma(c) => [c.luma, c.luma, c.luma, c.alpha],
+            Self::Oklab(c) => [c.l, c.a, c.b, c.alpha],
+            Self::Oklch(c) => {
                 [c.l, c.chroma, c.hue.into_degrees().rem_euclid(360.0), c.alpha]
             }
-            Color::Rgb(c) => [c.red, c.green, c.blue, c.alpha],
-            Color::LinearRgb(c) => [c.red, c.green, c.blue, c.alpha],
-            Color::Cmyk(c) => [c.c, c.m, c.y, c.k],
-            Color::Hsl(c) => [
+            Self::Rgb(c) => [c.red, c.green, c.blue, c.alpha],
+            Self::LinearRgb(c) => [c.red, c.green, c.blue, c.alpha],
+            Self::Cmyk(c) => [c.c, c.m, c.y, c.k],
+            Self::Hsl(c) => [
                 c.hue.into_degrees().rem_euclid(360.0),
                 c.saturation,
                 c.lightness,
                 c.alpha,
             ],
-            Color::Hsv(c) => {
+            Self::Hsv(c) => {
                 [c.hue.into_degrees().rem_euclid(360.0), c.saturation, c.value, c.alpha]
             }
         }
@@ -1279,34 +1755,34 @@ impl Color {
         self.to_vec4().map(|x| (x * 255.0).round() as u8)
     }
 
-    pub fn to_space(self, space: ColorSpace) -> Self {
+    pub fn to_space(&self, space: ProcessColorSpace) -> Self {
         match space {
-            ColorSpace::Oklab => self.to_oklab(),
-            ColorSpace::Oklch => self.to_oklch(),
-            ColorSpace::Srgb => self.to_rgb(),
-            ColorSpace::LinearRgb => self.to_linear_rgb(),
-            ColorSpace::Hsl => self.to_hsl(),
-            ColorSpace::Hsv => self.to_hsv(),
-            ColorSpace::Cmyk => self.to_cmyk(),
-            ColorSpace::D65Gray => self.to_luma(),
+            ProcessColorSpace::D65Gray => Self::Luma(self.to_luma()),
+            ProcessColorSpace::Oklab => Self::Oklab(self.to_oklab()),
+            ProcessColorSpace::Oklch => Self::Oklch(self.to_oklch()),
+            ProcessColorSpace::Srgb => Self::Rgb(self.to_rgb()),
+            ProcessColorSpace::LinearRgb => Self::LinearRgb(self.to_linear_rgb()),
+            ProcessColorSpace::Cmyk => Self::Cmyk(self.to_cmyk()),
+            ProcessColorSpace::Hsl => Self::Hsl(self.to_hsl()),
+            ProcessColorSpace::Hsv => Self::Hsv(self.to_hsv()),
         }
     }
 
-    pub fn to_luma(self) -> Self {
-        Self::Luma(match self {
+    pub fn to_luma(self) -> Luma {
+        match self {
             Self::Luma(c) => c,
-            Self::Oklab(c) => Luma::from_color(c),
-            Self::Oklch(c) => Luma::from_color(c),
-            Self::Rgb(c) => Luma::from_color(c),
-            Self::LinearRgb(c) => Luma::from_color(c),
+            Self::Oklab(c) => Luma::from_color(*c),
+            Self::Oklch(c) => Luma::from_color(*c),
+            Self::Rgb(c) => Luma::from_color(*c),
+            Self::LinearRgb(c) => Luma::from_color(*c),
             Self::Cmyk(c) => Luma::from_color(c.to_rgba()),
-            Self::Hsl(c) => Luma::from_color(c),
-            Self::Hsv(c) => Luma::from_color(c),
-        })
+            Self::Hsl(c) => Luma::from_color(*c),
+            Self::Hsv(c) => Luma::from_color(*c),
+        }
     }
 
-    pub fn to_oklab(self) -> Self {
-        Self::Oklab(match self {
+    pub fn to_oklab(self) -> Oklab {
+        match self {
             Self::Luma(c) => Oklab::from_color(c),
             Self::Oklab(c) => c,
             Self::Oklch(c) => Oklab::from_color(c),
@@ -1315,11 +1791,11 @@ impl Color {
             Self::Cmyk(c) => Oklab::from_color(c.to_rgba()),
             Self::Hsl(c) => Oklab::from_color(c),
             Self::Hsv(c) => Oklab::from_color(c),
-        })
+        }
     }
 
-    pub fn to_oklch(self) -> Self {
-        Self::Oklch(match self {
+    pub fn to_oklch(self) -> Oklch {
+        match self {
             Self::Luma(c) => Oklch::from_color(c),
             Self::Oklab(c) => Oklch::from_color(c),
             Self::Oklch(c) => c,
@@ -1328,11 +1804,11 @@ impl Color {
             Self::Cmyk(c) => Oklch::from_color(c.to_rgba()),
             Self::Hsl(c) => Oklch::from_color(c),
             Self::Hsv(c) => Oklch::from_color(c),
-        })
+        }
     }
 
-    pub fn to_rgb(self) -> Self {
-        Self::Rgb(match self {
+    pub fn to_rgb(self) -> Rgb {
+        match self {
             Self::Luma(c) => Rgb::from_color(c),
             Self::Oklab(c) => Rgb::from_color(c),
             Self::Oklch(c) => Rgb::from_color(c),
@@ -1341,11 +1817,11 @@ impl Color {
             Self::Cmyk(c) => Rgb::from_color(c.to_rgba()),
             Self::Hsl(c) => Rgb::from_color(c),
             Self::Hsv(c) => Rgb::from_color(c),
-        })
+        }
     }
 
-    pub fn to_linear_rgb(self) -> Self {
-        Self::LinearRgb(match self {
+    pub fn to_linear_rgb(self) -> LinearRgb {
+        match self {
             Self::Luma(c) => LinearRgb::from_color(c),
             Self::Oklab(c) => LinearRgb::from_color(c),
             Self::Oklch(c) => LinearRgb::from_color(c),
@@ -1354,11 +1830,11 @@ impl Color {
             Self::Cmyk(c) => LinearRgb::from_color(c.to_rgba()),
             Self::Hsl(c) => Rgb::from_color(c).into_linear(),
             Self::Hsv(c) => Rgb::from_color(c).into_linear(),
-        })
+        }
     }
 
-    pub fn to_cmyk(self) -> Self {
-        Self::Cmyk(match self {
+    pub fn to_cmyk(self) -> Cmyk {
+        match self {
             Self::Luma(c) => Cmyk::from_luma(c),
             Self::Oklab(c) => Cmyk::from_rgba(Rgb::from_color(c)),
             Self::Oklch(c) => Cmyk::from_rgba(Rgb::from_color(c)),
@@ -1367,11 +1843,11 @@ impl Color {
             Self::Cmyk(c) => c,
             Self::Hsl(c) => Cmyk::from_rgba(Rgb::from_color(c)),
             Self::Hsv(c) => Cmyk::from_rgba(Rgb::from_color(c)),
-        })
+        }
     }
 
-    pub fn to_hsl(self) -> Self {
-        Self::Hsl(match self {
+    pub fn to_hsl(self) -> Hsl {
+        match self {
             Self::Luma(c) => Hsl::from_color(c),
             Self::Oklab(c) => Hsl::from_color(c),
             Self::Oklch(c) => Hsl::from_color(c),
@@ -1380,11 +1856,11 @@ impl Color {
             Self::Cmyk(c) => Hsl::from_color(c.to_rgba()),
             Self::Hsl(c) => c,
             Self::Hsv(c) => Hsl::from_color(c),
-        })
+        }
     }
 
-    pub fn to_hsv(self) -> Self {
-        Self::Hsv(match self {
+    pub fn to_hsv(self) -> Hsv {
+        match self {
             Self::Luma(c) => Hsv::from_color(c),
             Self::Oklab(c) => Hsv::from_color(c),
             Self::Oklch(c) => Hsv::from_color(c),
@@ -1393,11 +1869,11 @@ impl Color {
             Self::Cmyk(c) => Hsv::from_color(c.to_rgba()),
             Self::Hsl(c) => Hsv::from_color(c),
             Self::Hsv(c) => c,
-        })
+        }
     }
 }
 
-impl Debug for Color {
+impl Debug for ProcessColor {
     fn fmt(&self, f: &mut Formatter) -> fmt::Result {
         match self {
             Self::Luma(v) => write!(f, "Luma({}, {})", v.luma, v.alpha),
@@ -1439,7 +1915,7 @@ impl Debug for Color {
     }
 }
 
-impl Repr for Color {
+impl Repr for ProcessColor {
     fn repr(&self) -> EcoString {
         match self {
             Self::Luma(c) => {
@@ -1557,11 +2033,9 @@ impl Repr for Color {
     }
 }
 
-fn hue_angle(degrees: f32) -> Angle {
-    Angle::deg(f64::from(degrees).rem_euclid(360.0))
-}
+impl Eq for ProcessColor {}
 
-impl PartialEq for Color {
+impl PartialEq for ProcessColor {
     fn eq(&self, other: &Self) -> bool {
         match (self, other) {
             // Lower precision for comparison to avoid rounding errors.
@@ -1581,9 +2055,7 @@ impl PartialEq for Color {
     }
 }
 
-impl Eq for Color {}
-
-impl Hash for Color {
+impl Hash for ProcessColor {
     fn hash<H: Hasher>(&self, state: &mut H) {
         core::mem::discriminant(self).hash(state);
         let [x, y, z, w] = self.to_vec4();
@@ -1594,7 +2066,7 @@ impl Hash for Color {
     }
 }
 
-impl FromStr for Color {
+impl FromStr for ProcessColor {
     type Err = &'static str;
 
     /// Constructs a new color from hex strings like the following:
@@ -1635,52 +2107,65 @@ impl FromStr for Color {
     }
 }
 
-impl From<Luma> for Color {
+impl From<Luma> for ProcessColor {
     fn from(c: Luma) -> Self {
         Self::Luma(c)
     }
 }
 
-impl From<Oklab> for Color {
+impl From<Oklab> for ProcessColor {
     fn from(c: Oklab) -> Self {
         Self::Oklab(c)
     }
 }
 
-impl From<Oklch> for Color {
+impl From<Oklch> for ProcessColor {
     fn from(c: Oklch) -> Self {
         Self::Oklch(c)
     }
 }
 
-impl From<Rgb> for Color {
+impl From<Rgb> for ProcessColor {
     fn from(c: Rgb) -> Self {
         Self::Rgb(c)
     }
 }
 
-impl From<LinearRgb> for Color {
+impl From<LinearRgb> for ProcessColor {
     fn from(c: LinearRgb) -> Self {
         Self::LinearRgb(c)
     }
 }
 
-impl From<Cmyk> for Color {
+impl From<Cmyk> for ProcessColor {
     fn from(c: Cmyk) -> Self {
         Self::Cmyk(c)
     }
 }
 
-impl From<Hsl> for Color {
+impl From<Hsl> for ProcessColor {
     fn from(c: Hsl) -> Self {
         Self::Hsl(c)
     }
 }
 
-impl From<Hsv> for Color {
+impl From<Hsv> for ProcessColor {
     fn from(c: Hsv) -> Self {
         Self::Hsv(c)
     }
+}
+
+cast! {
+    ProcessColor,
+    self => Color::from(self).into_value(),
+    v: Color => match v {
+        Color::Process(c) => c,
+        Color::Spot(_) => bail!("spot color found where process color is required")
+    },
+}
+
+fn hue_angle(degrees: f32) -> Angle {
+    Angle::deg(f64::from(degrees).rem_euclid(360.0))
 }
 
 /// An 8-bit CMYK color.
@@ -1706,8 +2191,8 @@ impl Cmyk {
         Cmyk::new(l * 0.75, l * 0.68, l * 0.67, l * 0.90)
     }
 
-    // This still uses naive conversion, because qcms does not support
-    // converting to CMYK yet.
+    // This still uses naive conversion, because the profile doesn't
+    // support converting _to_ CMYK.
     fn from_rgba(rgba: Rgb) -> Self {
         let r = rgba.red;
         let g = rgba.green;
@@ -1727,15 +2212,17 @@ impl Cmyk {
 
     fn to_rgba(self) -> Rgb {
         let mut dest: [u8; 3] = [0; 3];
-        TO_SRGB.convert(
-            &[
-                (self.c * 255.0).round() as u8,
-                (self.m * 255.0).round() as u8,
-                (self.y * 255.0).round() as u8,
-                (self.k * 255.0).round() as u8,
-            ],
-            &mut dest,
-        );
+        TO_SRGB
+            .transform(
+                &[
+                    (self.c * 255.0).round() as u8,
+                    (self.m * 255.0).round() as u8,
+                    (self.y * 255.0).round() as u8,
+                    (self.k * 255.0).round() as u8,
+                ],
+                &mut dest,
+            )
+            .unwrap();
 
         Rgb::new(
             f32::from(dest[0]) / 255.0,
@@ -1756,7 +2243,184 @@ impl Cmyk {
     }
 }
 
+/// A spot color.
+#[derive(Debug, Clone, Eq, PartialEq, Hash)]
+pub struct SpotColor {
+    /// Which colorant to apply.
+    pub colorant: Arc<SpotColorant>,
+    /// How much of the colorant to apply to the medium.
+    pub tint: Ratio,
+}
+
+impl SpotColor {
+    pub fn new(colorant: Arc<SpotColorant>, tint: Ratio) -> Self {
+        Self { tint, colorant }
+    }
+}
+
+impl SpotColor {
+    /// Lightens the spot color by a given factor.
+    pub fn lighten(&self, factor: Ratio) -> SpotColor {
+        let tint = self.tint.get();
+        SpotColor::new(
+            self.colorant.clone(),
+            Ratio::new((tint - tint * factor.get()).clamp(0.0, 1.0)),
+        )
+    }
+
+    /// Darkens the spot color by a given factor.
+    pub fn darken(&self, factor: Ratio) -> SpotColor {
+        let tint = self.tint.get();
+        SpotColor::new(
+            self.colorant.clone(),
+            Ratio::new((tint + (1.0 - tint) * factor.get()).clamp(0.0, 1.0)),
+        )
+    }
+
+    /// Negates the spot color (inverts the tint).
+    pub fn negate(&self) -> SpotColor {
+        SpotColor::new(self.colorant.clone(), Ratio::new(1.0 - self.tint.get()))
+    }
+
+    /// Returns the fallback process color with the tint applied.
+    pub fn fallback(&self) -> ProcessColor {
+        self.colorant.fallback.lighten(Ratio::one() - self.tint)
+    }
+}
+
+impl Repr for SpotColor {
+    fn repr(&self) -> EcoString {
+        eco_format!("{}.tint({})", self.colorant.repr(), self.tint.repr())
+    }
+}
+
+/// A spot colorant from which spot colors can be created.
+///
+/// Use spot colors to request a precise pigment in a professional print
+/// environment. Once you have created a spot colorant, you can create
+/// colors using its @color.spot.tint[`tint` method].
+#[derive(Debug, Clone, Eq, PartialEq, Hash)]
+#[ty(scope, name = "spot", title = "Spot Colorant")]
+pub struct SpotColorant {
+    /// Name of the spot colorant to use, if any.
+    pub name: Option<SpotColorantName>,
+    /// How to render this color if the specified colorant is not available.
+    pub fallback: ProcessColor,
+}
+
+impl Repr for SpotColorant {
+    fn repr(&self) -> EcoString {
+        eco_format!("color.spot({}, {})", self.name.repr(), self.fallback.repr())
+    }
+}
+
+#[scope]
+impl SpotColorant {
+    /// Create a new spot colorant.
+    #[func(constructor)]
+    pub fn construct(
+        /// Name of the spot colorant to use.
+        ///
+        /// In production, this name will be manually checked and matched to a
+        /// colorant, so this value needs to be unambiguous. It's best to
+        /// reference a color from a registry like PANTONE, HKS, RAL, Toyo &
+        /// DIC, etc.
+        ///
+        /// Values in here may be treated case-sensitively during production:
+        /// `{"PANTONE 2221 C"}` and `{"PANTONE 2221 c"}` may be treated as
+        /// separate colors. Ensure that you are using a consistent naming
+        /// convention, either referencing a registry or through coordination
+        /// with your production printing experts.
+        ///
+        /// If this value is `{"all"}` and your print will involve multiple
+        /// #link("https://en.wikipedia.org/wiki/Offset_printing#Plates")[color plates],
+        /// use of this colorant will result in the specified tint being applied
+        /// equally to all plates. If you choose `{none}`, no colorant will be
+        /// applied when using this color. This special value is often used to
+        /// indicate cuts or varnishes. Be sure to discuss this with your
+        /// production printer!
+        ///
+        /// We do not recommend using the names `{"Cyan"}`, `{"Magenta"}`,
+        /// `{"Yellow"}`, `{"Key"}`, `{"Black"}`, or their translations to your
+        /// local language. Depending on your printer, they may or may not be
+        /// interpreted as CMYK process colors.
+        name: Option<SpotColorantName>,
+        /// How to render this color if the specified colorant is not available.
+        ///
+        /// Many mediums, like on-screen preview and household printers, will not
+        /// have this specific spot colorant available. To display an approximation
+        /// of the intended print, another, available color is used instead.
+        fallback: ProcessColor,
+    ) -> SourceResult<SpotColorant> {
+        Ok(Self { name, fallback })
+    }
+
+    /// Create a spot color at a specific tint of this colorant.
+    ///
+    /// The tint represents what percentage of the colorant is applied. A tint
+    /// of `{100%}` means the colorant is applied at full strength, while `{0%}`
+    /// means no colorant is applied.
+    ///
+    /// ```example
+    /// #let pantone = color.spot(
+    ///   "PANTONE 2221 C",
+    ///   rgb("#239dad")
+    /// )
+    ///
+    /// #square(fill: pantone.tint(100%))
+    /// #square(fill: pantone.tint(70%))
+    /// #square(fill: pantone.tint(40%))
+    /// ```
+    #[func]
+    pub fn tint(
+        &self,
+        /// The tint percentage, between `{0%}` and `{100%}`.
+        value: Spanned<Ratio>,
+    ) -> SourceResult<Color> {
+        if value.v < Ratio::zero() {
+            bail!(value.span, "spot color tint must be positive")
+        }
+
+        if value.v > Ratio::one() {
+            bail!(value.span, "spot color tint must not exceed 100%")
+        }
+
+        Ok(Color::Spot(SpotColor::new(Arc::new(self.clone()), value.v)))
+    }
+}
+
+/// The name of a spot colorant.
+#[derive(Debug, Clone, Eq, PartialEq, Hash)]
+pub enum SpotColorantName {
+    /// The special `{"all"}` colorant that applies to all separation colorants.
+    All,
+    /// A custom colorant name (e.g., `{"PANTONE 2221 C"}`).
+    Custom(EcoString),
+}
+
+impl Repr for SpotColorantName {
+    fn repr(&self) -> EcoString {
+        match self {
+            Self::All => "all".repr(),
+            Self::Custom(name) => name.repr(),
+        }
+    }
+}
+
+cast! {
+    SpotColorantName,
+    self => match self {
+        Self::All => "all".into_value(),
+        Self::Custom(name) => name.into_value(),
+    },
+    /// Use all available color plates instead of only a specific colorant.
+    "all" => Self::All,
+    /// Use a specific colorant.
+    s: EcoString => Self::Custom(s),
+}
+
 /// A color with a weight.
+#[derive(Clone)]
 pub struct WeightedColor {
     color: Color,
     weight: f64,
@@ -1794,9 +2458,103 @@ cast! {
     v: Ratio => Self(v.get()),
 }
 
+/// Resolves `space` against an iterator of participating colors. If the space
+/// is `Custom`, it is returned immediately. Otherwise, if all colors are of the
+/// same spot colorant, that is returned and Oklab otherwise.
+pub(crate) fn resolve_color_space(
+    space: Smart<ColorSpace>,
+    colors: impl Iterator<Item = Color>,
+) -> ColorSpace {
+    enum Verdict {
+        InitialAuto,
+        Space(ColorSpace),
+        MayBeSpot(SpotColorant),
+    }
+
+    impl Verdict {
+        const fn fallback_space() -> ColorSpace {
+            ColorSpace::Process(ProcessColorSpace::Oklab)
+        }
+
+        const fn fallback() -> Self {
+            Self::Space(Self::fallback_space())
+        }
+    }
+
+    let mut verdict = match space {
+        Smart::Auto => Verdict::InitialAuto,
+        Smart::Custom(s) => return s,
+    };
+
+    for color in colors {
+        match &verdict {
+            Verdict::InitialAuto => {
+                verdict = match color.space() {
+                    ColorSpace::Process(_) => Verdict::fallback(),
+                    ColorSpace::Spot(colorant) => Verdict::MayBeSpot(colorant),
+                }
+            }
+            Verdict::MayBeSpot(colorant) => {
+                verdict = match color.space() {
+                    ColorSpace::Spot(other) if &other == colorant => verdict,
+                    _ => Verdict::fallback(),
+                }
+            }
+            Verdict::Space(_) => break,
+        }
+    }
+
+    match verdict {
+        Verdict::InitialAuto => Verdict::fallback_space(),
+        Verdict::Space(s) => s,
+        Verdict::MayBeSpot(colorant) => ColorSpace::Spot(colorant),
+    }
+}
+
+/// A color space for color manipulation.
+#[derive(Debug, Clone, Eq, PartialEq, Hash)]
+pub enum ColorSpace {
+    /// A mixable color space with a well-defined color model.
+    Process(ProcessColorSpace),
+    /// A spot colorant.
+    Spot(SpotColorant),
+}
+
+impl ColorSpace {
+    /// Returns the index of the hue component in this color space, if it has
+    /// one.
+    pub fn hue_index(&self) -> Option<usize> {
+        match self {
+            Self::Process(s) => s.hue_index(),
+            Self::Spot(_) => None,
+        }
+    }
+}
+
+cast! {
+    ColorSpace,
+    self => match self {
+        Self::Process(s) => s.variant_constructor(),
+        Self::Spot(s) => s.into_value()
+    },
+    spot: SpotColorant => Self::Spot(spot),
+    v: Value => {
+        let expected = "expected `rgb`, `luma`, `cmyk`, `oklab`, `oklch`, `color.linear-rgb`, `color.hsl`, `color.hsv`, or spot colorant";
+
+        let Value::Func(func) = v else {
+            bail!("{expected}, found {}", v.ty());
+        };
+
+        match ProcessColorSpace::try_from_constructor(func) {
+            Some(space) => Self::Process(space),
+            None => bail!("{expected}")
+        }
+    },
+}
+
 /// A color space for color manipulation.
 #[derive(Debug, Copy, Clone, Eq, PartialEq, Hash)]
-pub enum ColorSpace {
+pub enum ProcessColorSpace {
     /// The perceptual Oklab color space.
     Oklab,
     /// The perceptual Oklch color space.
@@ -1815,39 +2573,37 @@ pub enum ColorSpace {
     Cmyk,
 }
 
-impl ColorSpace {
+impl ProcessColorSpace {
     /// Returns the index of the hue component in this color space, if it has
     /// one.
-    pub fn hue_index(&self) -> Option<usize> {
+    pub fn hue_index(self) -> Option<usize> {
         match self {
             Self::Hsl | Self::Hsv => Some(0),
             Self::Oklch => Some(2),
             _ => None,
         }
     }
-}
 
-cast! {
-    ColorSpace,
-    self => match self {
-        Self::Oklab => Color::oklab_data(),
-        Self::Oklch => Color::oklch_data(),
-        Self::Srgb => Color::rgb_data(),
-        Self::D65Gray => Color::luma_data(),
-        Self::LinearRgb => Color::linear_rgb_data(),
-        Self::Hsl => Color::hsl_data(),
-        Self::Hsv => Color::hsv_data(),
-        Self::Cmyk => Color::cmyk_data(),
-    }.into_value(),
-    v: Value => {
-        let expected = "expected `rgb`, `luma`, `cmyk`, `oklab`, `oklch`, `color.linear-rgb`, `color.hsl`, or `color.hsv`";
-        let Value::Func(func) = v else {
-            bail!("{expected}, found {}", v.ty());
-        };
+    /// Return the value for each variant's constructor.
+    fn variant_constructor(self) -> Value {
+        match self {
+            Self::Oklab => Color::oklab_data(),
+            Self::Oklch => Color::oklch_data(),
+            Self::Srgb => Color::rgb_data(),
+            Self::D65Gray => Color::luma_data(),
+            Self::LinearRgb => Color::linear_rgb_data(),
+            Self::Hsl => Color::hsl_data(),
+            Self::Hsv => Color::hsv_data(),
+            Self::Cmyk => Color::cmyk_data(),
+        }
+        .into_value()
+    }
 
+    /// Given a constructor, return the matching variant.
+    fn try_from_constructor(func: Func) -> Option<Self> {
         // Here comparing the function pointer since it's `Eq`
         // whereas the `NativeFuncData` is not.
-        if func == Color::oklab_data() {
+        Some(if func == Color::oklab_data() {
             Self::Oklab
         } else if func == Color::oklch_data() {
             Self::Oklch
@@ -1864,7 +2620,30 @@ cast! {
         } else if func == Color::cmyk_data() {
             Self::Cmyk
         } else {
-            bail!("{expected}");
+            return None;
+        })
+    }
+}
+
+impl From<ProcessColorSpace> for ColorSpace {
+    fn from(value: ProcessColorSpace) -> Self {
+        Self::Process(value)
+    }
+}
+
+cast! {
+    ProcessColorSpace,
+    self => self.variant_constructor(),
+    v: Value => {
+        let expected = "expected `rgb`, `luma`, `cmyk`, `oklab`, `oklch`, `color.linear-rgb`, `color.hsl`, or `color.hsv`";
+
+        let Value::Func(func) = v else {
+            bail!("{expected}, found {}", v.ty());
+        };
+
+        match Self::try_from_constructor(func) {
+            Some(space) => space,
+            None => bail!("{expected}")
         }
     },
 }
@@ -1925,6 +2704,7 @@ fn map() -> Module {
     scope.define("plasma", plasma());
     scope.define("rocket", rocket());
     scope.define("mako", mako());
+    scope.define("coolwarm", coolwarm());
     scope.define("vlag", vlag());
     scope.define("icefire", icefire());
     scope.define("flare", flare());
@@ -1938,7 +2718,7 @@ macro_rules! preset {
         fn $name() -> Array {
             Array::from(
                 [$(Color::from_u32($colors)),*]
-                    .iter()
+                    .into_iter()
                     .map(|c| c.into_value())
                     .collect::<EcoVec<_>>()
             )
@@ -1956,6 +2736,7 @@ preset!(magma; 0x000004ff, 0x140e37ff, 0x3b0f70ff, 0x641a80ff, 0x8c2981ff, 0xb63
 preset!(plasma; 0x0d0887ff, 0x42039dff, 0x6a00a8ff, 0x900da3ff, 0xb12a90ff, 0xcb4678ff, 0xe16462ff, 0xf1834bff, 0xfca636ff, 0xfccd25ff, 0xf0f921ff);
 preset!(rocket; 0x3051aff, 0x4051aff, 0x5061bff, 0x6071cff, 0x7071dff, 0x8081eff, 0xa091fff, 0xb0920ff, 0xd0a21ff, 0xe0b22ff, 0x100b23ff, 0x110c24ff, 0x130d25ff, 0x140e26ff, 0x160e27ff, 0x170f28ff, 0x180f29ff, 0x1a102aff, 0x1b112bff, 0x1d112cff, 0x1e122dff, 0x20122eff, 0x211330ff, 0x221331ff, 0x241432ff, 0x251433ff, 0x271534ff, 0x281535ff, 0x2a1636ff, 0x2b1637ff, 0x2d1738ff, 0x2e1739ff, 0x30173aff, 0x31183bff, 0x33183cff, 0x34193dff, 0x35193eff, 0x37193fff, 0x381a40ff, 0x3a1a41ff, 0x3c1a42ff, 0x3d1a42ff, 0x3f1b43ff, 0x401b44ff, 0x421b45ff, 0x431c46ff, 0x451c47ff, 0x461c48ff, 0x481c48ff, 0x491d49ff, 0x4b1d4aff, 0x4c1d4bff, 0x4e1d4bff, 0x501d4cff, 0x511e4dff, 0x531e4dff, 0x541e4eff, 0x561e4fff, 0x581e4fff, 0x591e50ff, 0x5b1e51ff, 0x5c1e51ff, 0x5e1f52ff, 0x601f52ff, 0x611f53ff, 0x631f53ff, 0x641f54ff, 0x661f54ff, 0x681f55ff, 0x691f55ff, 0x6b1f56ff, 0x6d1f56ff, 0x6e1f57ff, 0x701f57ff, 0x711f57ff, 0x731f58ff, 0x751f58ff, 0x761f58ff, 0x781f59ff, 0x7a1f59ff, 0x7b1f59ff, 0x7d1f5aff, 0x7f1e5aff, 0x811e5aff, 0x821e5aff, 0x841e5aff, 0x861e5bff, 0x871e5bff, 0x891e5bff, 0x8b1d5bff, 0x8c1d5bff, 0x8e1d5bff, 0x901d5bff, 0x921c5bff, 0x931c5bff, 0x951c5bff, 0x971c5bff, 0x981b5bff, 0x9a1b5bff, 0x9c1b5bff, 0x9e1a5bff, 0x9f1a5bff, 0xa11a5bff, 0xa3195bff, 0xa4195bff, 0xa6195aff, 0xa8185aff, 0xaa185aff, 0xab185aff, 0xad1759ff, 0xaf1759ff, 0xb01759ff, 0xb21758ff, 0xb41658ff, 0xb51657ff, 0xb71657ff, 0xb91657ff, 0xba1656ff, 0xbc1656ff, 0xbd1655ff, 0xbf1654ff, 0xc11754ff, 0xc21753ff, 0xc41753ff, 0xc51852ff, 0xc71951ff, 0xc81951ff, 0xca1a50ff, 0xcb1b4fff, 0xcd1c4eff, 0xce1d4eff, 0xcf1e4dff, 0xd11f4cff, 0xd2204cff, 0xd3214bff, 0xd5224aff, 0xd62449ff, 0xd72549ff, 0xd82748ff, 0xd92847ff, 0xdb2946ff, 0xdc2b46ff, 0xdd2c45ff, 0xde2e44ff, 0xdf2f44ff, 0xe03143ff, 0xe13342ff, 0xe23442ff, 0xe33641ff, 0xe43841ff, 0xe53940ff, 0xe63b40ff, 0xe73d3fff, 0xe83f3fff, 0xe8403eff, 0xe9423eff, 0xea443eff, 0xeb463eff, 0xeb483eff, 0xec4a3eff, 0xec4c3eff, 0xed4e3eff, 0xed503eff, 0xee523fff, 0xee543fff, 0xef5640ff, 0xef5840ff, 0xef5a41ff, 0xf05c42ff, 0xf05e42ff, 0xf06043ff, 0xf16244ff, 0xf16445ff, 0xf16646ff, 0xf26747ff, 0xf26948ff, 0xf26b49ff, 0xf26d4bff, 0xf26f4cff, 0xf3714dff, 0xf3734eff, 0xf37450ff, 0xf37651ff, 0xf37852ff, 0xf47a54ff, 0xf47c55ff, 0xf47d57ff, 0xf47f58ff, 0xf4815aff, 0xf4835bff, 0xf4845dff, 0xf4865eff, 0xf58860ff, 0xf58a61ff, 0xf58b63ff, 0xf58d64ff, 0xf58f66ff, 0xf59067ff, 0xf59269ff, 0xf5946bff, 0xf5966cff, 0xf5976eff, 0xf59970ff, 0xf69b71ff, 0xf69c73ff, 0xf69e75ff, 0xf6a077ff, 0xf6a178ff, 0xf6a37aff, 0xf6a47cff, 0xf6a67eff, 0xf6a880ff, 0xf6a981ff, 0xf6ab83ff, 0xf6ad85ff, 0xf6ae87ff, 0xf6b089ff, 0xf6b18bff, 0xf6b38dff, 0xf6b48fff, 0xf6b691ff, 0xf6b893ff, 0xf6b995ff, 0xf6bb97ff, 0xf6bc99ff, 0xf6be9bff, 0xf6bf9dff, 0xf6c19fff, 0xf7c2a2ff, 0xf7c4a4ff, 0xf7c6a6ff, 0xf7c7a8ff, 0xf7c9aaff, 0xf7caacff, 0xf7ccafff, 0xf7cdb1ff, 0xf7cfb3ff, 0xf7d0b5ff, 0xf8d1b8ff, 0xf8d3baff, 0xf8d4bcff, 0xf8d6beff, 0xf8d7c0ff, 0xf8d9c3ff, 0xf8dac5ff, 0xf8dcc7ff, 0xf9ddc9ff, 0xf9dfcbff, 0xf9e0cdff, 0xf9e2d0ff, 0xf9e3d2ff, 0xf9e5d4ff, 0xfae6d6ff, 0xfae8d8ff, 0xfae9daff, 0xfaebddff);
 preset!(mako; 0xb0405ff, 0xd0406ff, 0xe0508ff, 0xf0609ff, 0x10060aff, 0x11070cff, 0x12080dff, 0x13090fff, 0x140910ff, 0x150a12ff, 0x160b13ff, 0x170c15ff, 0x180d16ff, 0x190e18ff, 0x1a0e19ff, 0x1b0f1aff, 0x1c101cff, 0x1d111dff, 0x1e111fff, 0x1f1220ff, 0x201322ff, 0x211423ff, 0x221425ff, 0x231526ff, 0x241628ff, 0x251729ff, 0x26172bff, 0x27182dff, 0x28192eff, 0x291930ff, 0x291a31ff, 0x2a1b33ff, 0x2b1c35ff, 0x2c1c36ff, 0x2d1d38ff, 0x2e1e39ff, 0x2e1e3bff, 0x2f1f3dff, 0x30203eff, 0x312140ff, 0x312142ff, 0x322243ff, 0x332345ff, 0x342447ff, 0x342548ff, 0x35254aff, 0x35264cff, 0x36274dff, 0x37284fff, 0x372851ff, 0x382953ff, 0x382a54ff, 0x392b56ff, 0x3a2c58ff, 0x3a2c59ff, 0x3b2d5bff, 0x3b2e5dff, 0x3b2f5fff, 0x3c3060ff, 0x3c3162ff, 0x3d3164ff, 0x3d3266ff, 0x3e3367ff, 0x3e3469ff, 0x3e356bff, 0x3f366dff, 0x3f366fff, 0x3f3770ff, 0x403872ff, 0x403974ff, 0x403a76ff, 0x403b78ff, 0x403c79ff, 0x413d7bff, 0x413e7dff, 0x413e7fff, 0x413f80ff, 0x414082ff, 0x414184ff, 0x414285ff, 0x414387ff, 0x414488ff, 0x40468aff, 0x40478bff, 0x40488dff, 0x40498eff, 0x3f4a8fff, 0x3f4b90ff, 0x3f4c92ff, 0x3e4d93ff, 0x3e4f94ff, 0x3e5095ff, 0x3d5195ff, 0x3d5296ff, 0x3c5397ff, 0x3c5598ff, 0x3b5698ff, 0x3b5799ff, 0x3b589aff, 0x3a599aff, 0x3a5b9bff, 0x3a5c9bff, 0x395d9cff, 0x395e9cff, 0x385f9cff, 0x38619dff, 0x38629dff, 0x38639dff, 0x37649eff, 0x37659eff, 0x37669eff, 0x37689fff, 0x36699fff, 0x366a9fff, 0x366b9fff, 0x366ca0ff, 0x366da0ff, 0x366fa0ff, 0x3670a0ff, 0x3671a0ff, 0x3572a1ff, 0x3573a1ff, 0x3574a1ff, 0x3575a1ff, 0x3576a2ff, 0x3578a2ff, 0x3579a2ff, 0x357aa2ff, 0x357ba3ff, 0x357ca3ff, 0x357da3ff, 0x357ea4ff, 0x347fa4ff, 0x3480a4ff, 0x3482a4ff, 0x3483a5ff, 0x3484a5ff, 0x3485a5ff, 0x3486a5ff, 0x3487a6ff, 0x3488a6ff, 0x3489a6ff, 0x348ba6ff, 0x348ca7ff, 0x348da7ff, 0x348ea7ff, 0x348fa7ff, 0x3490a8ff, 0x3491a8ff, 0x3492a8ff, 0x3493a8ff, 0x3495a9ff, 0x3496a9ff, 0x3497a9ff, 0x3498a9ff, 0x3499aaff, 0x349aaaff, 0x359baaff, 0x359caaff, 0x359eaaff, 0x359fabff, 0x35a0abff, 0x35a1abff, 0x36a2abff, 0x36a3abff, 0x36a4abff, 0x37a5acff, 0x37a6acff, 0x37a8acff, 0x38a9acff, 0x38aaacff, 0x39abacff, 0x39acacff, 0x3aadacff, 0x3aaeadff, 0x3bafadff, 0x3cb1adff, 0x3cb2adff, 0x3db3adff, 0x3eb4adff, 0x3fb5adff, 0x3fb6adff, 0x40b7adff, 0x41b8adff, 0x42b9adff, 0x43baadff, 0x44bcadff, 0x45bdadff, 0x46beadff, 0x47bfadff, 0x48c0adff, 0x49c1adff, 0x4bc2adff, 0x4cc3adff, 0x4dc4adff, 0x4fc5adff, 0x50c6adff, 0x52c7adff, 0x53c9adff, 0x55caadff, 0x57cbadff, 0x59ccadff, 0x5bcdadff, 0x5ecdadff, 0x60ceacff, 0x62cfacff, 0x65d0adff, 0x68d1adff, 0x6ad2adff, 0x6dd3adff, 0x70d4adff, 0x73d4adff, 0x76d5aeff, 0x79d6aeff, 0x7cd6afff, 0x7fd7afff, 0x82d8b0ff, 0x85d9b1ff, 0x88d9b1ff, 0x8bdab2ff, 0x8edbb3ff, 0x91dbb4ff, 0x94dcb5ff, 0x96ddb5ff, 0x99ddb6ff, 0x9cdeb7ff, 0x9edfb8ff, 0xa1dfb9ff, 0xa4e0bbff, 0xa6e1bcff, 0xa9e1bdff, 0xabe2beff, 0xaee3c0ff, 0xb0e4c1ff, 0xb2e4c2ff, 0xb5e5c4ff, 0xb7e6c5ff, 0xb9e6c7ff, 0xbbe7c8ff, 0xbee8caff, 0xc0e9ccff, 0xc2e9cdff, 0xc4eacfff, 0xc6ebd1ff, 0xc8ecd2ff, 0xcaedd4ff, 0xccedd6ff, 0xceeed7ff, 0xd0efd9ff, 0xd2f0dbff, 0xd4f1dcff, 0xd6f1deff, 0xd8f2e0ff, 0xdaf3e1ff, 0xdcf4e3ff, 0xdef5e5ff);
+preset!(coolwarm; 0x3b4cc0ff, 0x3c4ec2ff, 0x3d50c3ff, 0x3e51c5ff, 0x3f53c6ff, 0x4055c8ff, 0x4257c9ff, 0x4358cbff, 0x445accff, 0x455cceff, 0x465ecfff, 0x485fd1ff, 0x4961d2ff, 0x4a63d3ff, 0x4b64d5ff, 0x4c66d6ff, 0x4e68d8ff, 0x4f69d9ff, 0x506bdaff, 0x516ddbff, 0x536eddff, 0x5470deff, 0x5572dfff, 0x5673e0ff, 0x5875e1ff, 0x5977e3ff, 0x5a78e4ff, 0x5b7ae5ff, 0x5d7ce6ff, 0x5e7de7ff, 0x5f7fe8ff, 0x6180e9ff, 0x6282eaff, 0x6384ebff, 0x6485ecff, 0x6687edff, 0x6788eeff, 0x688aefff, 0x6a8befff, 0x6b8df0ff, 0x6c8ff1ff, 0x6e90f2ff, 0x6f92f3ff, 0x7093f3ff, 0x7295f4ff, 0x7396f5ff, 0x7597f6ff, 0x7699f6ff, 0x779af7ff, 0x799cf8ff, 0x7a9df8ff, 0x7b9ff9ff, 0x7da0f9ff, 0x7ea1faff, 0x80a3faff, 0x81a4fbff, 0x82a6fbff, 0x84a7fcff, 0x85a8fcff, 0x86a9fcff, 0x88abfdff, 0x89acfdff, 0x8badfdff, 0x8caffeff, 0x8db0feff, 0x8fb1feff, 0x90b2feff, 0x92b4feff, 0x93b5feff, 0x94b6ffff, 0x96b7ffff, 0x97b8ffff, 0x98b9ffff, 0x9abbffff, 0x9bbcffff, 0x9dbdffff, 0x9ebeffff, 0x9fbfffff, 0xa1c0ffff, 0xa2c1ffff, 0xa3c2feff, 0xa5c3feff, 0xa6c4feff, 0xa7c5feff, 0xa9c6fdff, 0xaac7fdff, 0xabc8fdff, 0xadc9fdff, 0xaec9fcff, 0xafcafcff, 0xb1cbfcff, 0xb2ccfbff, 0xb3cdfbff, 0xb5cdfaff, 0xb6cefaff, 0xb7cff9ff, 0xb9d0f9ff, 0xbad0f8ff, 0xbbd1f8ff, 0xbcd2f7ff, 0xbed2f6ff, 0xbfd3f6ff, 0xc0d4f5ff, 0xc1d4f4ff, 0xc3d5f4ff, 0xc4d5f3ff, 0xc5d6f2ff, 0xc6d6f1ff, 0xc7d7f0ff, 0xc9d7f0ff, 0xcad8efff, 0xcbd8eeff, 0xccd9edff, 0xcdd9ecff, 0xcedaebff, 0xcfdaeaff, 0xd1dae9ff, 0xd2dbe8ff, 0xd3dbe7ff, 0xd4dbe6ff, 0xd5dbe5ff, 0xd6dce4ff, 0xd7dce3ff, 0xd8dce2ff, 0xd9dce1ff, 0xdadce0ff, 0xdbdcdeff, 0xdcddddff, 0xdddcdcff, 0xdedcdbff, 0xdfdbd9ff, 0xe0dbd8ff, 0xe1dad6ff, 0xe2dad5ff, 0xe3d9d3ff, 0xe4d9d2ff, 0xe5d8d1ff, 0xe6d7cfff, 0xe7d7ceff, 0xe8d6ccff, 0xe9d5cbff, 0xead5c9ff, 0xead4c8ff, 0xebd3c6ff, 0xecd3c5ff, 0xedd2c3ff, 0xedd1c2ff, 0xeed0c0ff, 0xefcfbfff, 0xefcebdff, 0xf0cdbbff, 0xf1cdbaff, 0xf1ccb8ff, 0xf2cbb7ff, 0xf2cab5ff, 0xf2c9b4ff, 0xf3c8b2ff, 0xf3c7b1ff, 0xf4c6afff, 0xf4c5adff, 0xf5c4acff, 0xf5c2aaff, 0xf5c1a9ff, 0xf5c0a7ff, 0xf6bfa6ff, 0xf6bea4ff, 0xf6bda2ff, 0xf7bca1ff, 0xf7ba9fff, 0xf7b99eff, 0xf7b89cff, 0xf7b79bff, 0xf7b599ff, 0xf7b497ff, 0xf7b396ff, 0xf7b194ff, 0xf7b093ff, 0xf7af91ff, 0xf7ad90ff, 0xf7ac8eff, 0xf7aa8cff, 0xf7a98bff, 0xf7a889ff, 0xf7a688ff, 0xf6a586ff, 0xf6a385ff, 0xf6a283ff, 0xf5a081ff, 0xf59f80ff, 0xf59d7eff, 0xf59c7dff, 0xf49a7bff, 0xf4987aff, 0xf39778ff, 0xf39577ff, 0xf39475ff, 0xf29274ff, 0xf29072ff, 0xf18f71ff, 0xf18d6fff, 0xf08b6eff, 0xf08a6cff, 0xef886bff, 0xee8669ff, 0xee8468ff, 0xed8366ff, 0xec8165ff, 0xec7f63ff, 0xeb7d62ff, 0xea7b60ff, 0xe97a5fff, 0xe9785dff, 0xe8765cff, 0xe7745bff, 0xe67259ff, 0xe57058ff, 0xe46e56ff, 0xe36c55ff, 0xe36b54ff, 0xe26952ff, 0xe16751ff, 0xe0654fff, 0xdf634eff, 0xde614dff, 0xdd5f4bff, 0xdc5d4aff, 0xda5a49ff, 0xd95847ff, 0xd85646ff, 0xd75445ff, 0xd65244ff, 0xd55042ff, 0xd44e41ff, 0xd24b40ff, 0xd1493fff, 0xd0473dff, 0xcf453cff, 0xcd423bff, 0xcc403aff, 0xcb3e38ff, 0xca3b37ff, 0xc83836ff, 0xc73635ff, 0xc53334ff, 0xc43032ff, 0xc32e31ff, 0xc12b30ff, 0xc0282fff, 0xbe242eff, 0xbd1f2dff, 0xbb1b2cff, 0xba162bff, 0xb8122aff, 0xb70d28ff, 0xb50927ff, 0xb40426ff);
 preset!(vlag; 0x2369bdff, 0x266abdff, 0x296cbcff, 0x2c6dbcff, 0x2f6ebcff, 0x316fbcff, 0x3470bcff, 0x3671bcff, 0x3972bcff, 0x3b73bcff, 0x3d74bcff, 0x3f75bcff, 0x4276bcff, 0x4477bcff, 0x4678bcff, 0x4879bcff, 0x4a7bbcff, 0x4c7cbcff, 0x4e7dbcff, 0x507ebcff, 0x517fbcff, 0x5380bcff, 0x5581bcff, 0x5782bcff, 0x5983bdff, 0x5b84bdff, 0x5c85bdff, 0x5e86bdff, 0x6087bdff, 0x6288bdff, 0x6489beff, 0x658abeff, 0x678bbeff, 0x698cbeff, 0x6a8dbfff, 0x6c8ebfff, 0x6e90bfff, 0x6f91bfff, 0x7192c0ff, 0x7393c0ff, 0x7594c0ff, 0x7695c1ff, 0x7896c1ff, 0x7997c1ff, 0x7b98c2ff, 0x7d99c2ff, 0x7e9ac2ff, 0x809bc3ff, 0x829cc3ff, 0x839dc4ff, 0x859ec4ff, 0x87a0c4ff, 0x88a1c5ff, 0x8aa2c5ff, 0x8ba3c6ff, 0x8da4c6ff, 0x8fa5c7ff, 0x90a6c7ff, 0x92a7c8ff, 0x93a8c8ff, 0x95a9c8ff, 0x97abc9ff, 0x98acc9ff, 0x9aadcaff, 0x9baecbff, 0x9dafcbff, 0x9fb0ccff, 0xa0b1ccff, 0xa2b2cdff, 0xa3b4cdff, 0xa5b5ceff, 0xa7b6ceff, 0xa8b7cfff, 0xaab8d0ff, 0xabb9d0ff, 0xadbbd1ff, 0xafbcd1ff, 0xb0bdd2ff, 0xb2bed3ff, 0xb3bfd3ff, 0xb5c0d4ff, 0xb7c2d5ff, 0xb8c3d5ff, 0xbac4d6ff, 0xbbc5d7ff, 0xbdc6d7ff, 0xbfc8d8ff, 0xc0c9d9ff, 0xc2cadaff, 0xc3cbdaff, 0xc5cddbff, 0xc7cedcff, 0xc8cfddff, 0xcad0ddff, 0xcbd1deff, 0xcdd3dfff, 0xcfd4e0ff, 0xd0d5e0ff, 0xd2d7e1ff, 0xd4d8e2ff, 0xd5d9e3ff, 0xd7dae4ff, 0xd9dce5ff, 0xdadde5ff, 0xdcdee6ff, 0xdde0e7ff, 0xdfe1e8ff, 0xe1e2e9ff, 0xe2e3eaff, 0xe4e5ebff, 0xe6e6ecff, 0xe7e7ecff, 0xe9e9edff, 0xebeaeeff, 0xecebefff, 0xeeedf0ff, 0xefeef1ff, 0xf1eff2ff, 0xf2f0f2ff, 0xf3f1f3ff, 0xf5f2f4ff, 0xf6f3f4ff, 0xf7f4f4ff, 0xf8f4f5ff, 0xf9f5f5ff, 0xf9f5f5ff, 0xfaf5f5ff, 0xfaf5f5ff, 0xfaf5f4ff, 0xfaf5f4ff, 0xfaf4f3ff, 0xfaf3f3ff, 0xfaf3f2ff, 0xfaf2f1ff, 0xfaf0efff, 0xf9efeeff, 0xf9eeedff, 0xf8edebff, 0xf7ebeaff, 0xf7eae8ff, 0xf6e8e7ff, 0xf5e7e5ff, 0xf5e5e4ff, 0xf4e3e2ff, 0xf3e2e0ff, 0xf2e0dfff, 0xf2dfddff, 0xf1dddbff, 0xf0dbdaff, 0xefdad8ff, 0xefd8d6ff, 0xeed7d5ff, 0xedd5d3ff, 0xecd3d2ff, 0xecd2d0ff, 0xebd0ceff, 0xeacfcdff, 0xeacdcbff, 0xe9cbc9ff, 0xe8cac8ff, 0xe7c8c6ff, 0xe7c7c5ff, 0xe6c5c3ff, 0xe5c3c1ff, 0xe5c2c0ff, 0xe4c0beff, 0xe3bfbdff, 0xe3bdbbff, 0xe2bcb9ff, 0xe1bab8ff, 0xe1b9b6ff, 0xe0b7b5ff, 0xdfb5b3ff, 0xdfb4b2ff, 0xdeb2b0ff, 0xdeb1aeff, 0xddafadff, 0xdcaeabff, 0xdcacaaff, 0xdbaba8ff, 0xdaa9a7ff, 0xdaa8a5ff, 0xd9a6a4ff, 0xd9a5a2ff, 0xd8a3a0ff, 0xd7a29fff, 0xd7a09dff, 0xd69f9cff, 0xd59d9aff, 0xd59c99ff, 0xd49a97ff, 0xd49896ff, 0xd39794ff, 0xd29593ff, 0xd29491ff, 0xd19290ff, 0xd1918eff, 0xd08f8dff, 0xcf8e8bff, 0xcf8c8aff, 0xce8b88ff, 0xcd8987ff, 0xcd8885ff, 0xcc8784ff, 0xcc8582ff, 0xcb8481ff, 0xca827fff, 0xca817eff, 0xc97f7dff, 0xc87e7bff, 0xc87c7aff, 0xc77b78ff, 0xc77977ff, 0xc67875ff, 0xc57674ff, 0xc57572ff, 0xc47371ff, 0xc3726fff, 0xc3706eff, 0xc26f6dff, 0xc16d6bff, 0xc16c6aff, 0xc06a68ff, 0xc06967ff, 0xbf6765ff, 0xbe6664ff, 0xbe6463ff, 0xbd6361ff, 0xbc6160ff, 0xbc605eff, 0xbb5e5dff, 0xba5d5cff, 0xb95b5aff, 0xb95a59ff, 0xb85857ff, 0xb75756ff, 0xb75555ff, 0xb65453ff, 0xb55252ff, 0xb55151ff, 0xb44f4fff, 0xb34d4eff, 0xb24c4cff, 0xb24a4bff, 0xb1494aff, 0xb04748ff, 0xaf4647ff, 0xaf4446ff, 0xae4244ff, 0xad4143ff, 0xac3f42ff, 0xac3e40ff, 0xab3c3fff, 0xaa3a3eff, 0xa9393cff, 0xa9373bff);
 preset!(icefire; 0xbde7dbff, 0xbae5daff, 0xb7e3d9ff, 0xb4e1d9ff, 0xb2dfd8ff, 0xafddd7ff, 0xacdbd7ff, 0xa9d9d6ff, 0xa7d7d5ff, 0xa4d5d5ff, 0xa1d3d4ff, 0x9ed1d3ff, 0x9bcfd3ff, 0x98cdd2ff, 0x95cbd2ff, 0x93cad1ff, 0x90c8d1ff, 0x8dc6d0ff, 0x8ac4d0ff, 0x87c2cfff, 0x84c1cfff, 0x81bfcfff, 0x7ebdceff, 0x7bbbceff, 0x78b9ceff, 0x75b8ceff, 0x72b6ceff, 0x6eb4cdff, 0x6bb2cdff, 0x68b0cdff, 0x65afcdff, 0x63adcdff, 0x60abcdff, 0x5da9cdff, 0x5aa7cdff, 0x58a5cdff, 0x55a3cdff, 0x53a2cdff, 0x50a0cdff, 0x4e9ecdff, 0x4c9ccdff, 0x499aceff, 0x4798ceff, 0x4596ceff, 0x4394ceff, 0x4192ceff, 0x3f90ceff, 0x3e8ecfff, 0x3c8ccfff, 0x3a89cfff, 0x3987cfff, 0x3885d0ff, 0x3783d0ff, 0x3781d0ff, 0x377fd0ff, 0x377cd0ff, 0x377ad0ff, 0x3878cfff, 0x3975cfff, 0x3a73ceff, 0x3b71cdff, 0x3d6eccff, 0x3e6ccbff, 0x3f69c9ff, 0x4167c7ff, 0x4265c5ff, 0x4363c3ff, 0x4560c1ff, 0x465ebeff, 0x475cbcff, 0x475ab9ff, 0x4858b6ff, 0x4956b3ff, 0x4954b0ff, 0x4952adff, 0x4a50a9ff, 0x4a4fa5ff, 0x494da1ff, 0x494c9eff, 0x494a9aff, 0x484996ff, 0x474792ff, 0x47468eff, 0x46458aff, 0x454386ff, 0x444282ff, 0x43417fff, 0x42407bff, 0x413e77ff, 0x3f3d74ff, 0x3e3c70ff, 0x3d3b6dff, 0x3c3a69ff, 0x3b3866ff, 0x393763ff, 0x38365fff, 0x37355cff, 0x363459ff, 0x343356ff, 0x333153ff, 0x323050ff, 0x312f4dff, 0x302e4aff, 0x2e2d48ff, 0x2d2c45ff, 0x2c2b42ff, 0x2b2a40ff, 0x2a293dff, 0x29283bff, 0x282739ff, 0x272636ff, 0x262534ff, 0x252532ff, 0x242430ff, 0x24232eff, 0x23222dff, 0x22222bff, 0x222129ff, 0x212028ff, 0x212026ff, 0x202025ff, 0x201f24ff, 0x1f1f23ff, 0x1f1f21ff, 0x1f1e21ff, 0x1f1e20ff, 0x1f1e1fff, 0x1f1e1eff, 0x1f1e1eff, 0x201e1eff, 0x211e1eff, 0x221e1eff, 0x231e1eff, 0x251e1fff, 0x261e1fff, 0x271e1fff, 0x291e20ff, 0x2a1e20ff, 0x2c1e21ff, 0x2d1f21ff, 0x2f1f22ff, 0x311f23ff, 0x332023ff, 0x352024ff, 0x372025ff, 0x392126ff, 0x3b2127ff, 0x3d2228ff, 0x3f2228ff, 0x412329ff, 0x43232aff, 0x46242bff, 0x48242cff, 0x4a252eff, 0x4d252fff, 0x4f2630ff, 0x522731ff, 0x542732ff, 0x572833ff, 0x5a2834ff, 0x5c2935ff, 0x5f2936ff, 0x622937ff, 0x642a38ff, 0x672a39ff, 0x6a2b3aff, 0x6d2b3bff, 0x702b3cff, 0x722c3dff, 0x752c3eff, 0x782c3fff, 0x7b2d40ff, 0x7e2d40ff, 0x812d41ff, 0x842d42ff, 0x872d42ff, 0x8a2e43ff, 0x8d2e43ff, 0x902e44ff, 0x932e44ff, 0x962e44ff, 0x992e44ff, 0x9c2f45ff, 0x9f2f44ff, 0xa22f44ff, 0xa52f44ff, 0xa83044ff, 0xab3043ff, 0xae3143ff, 0xb13242ff, 0xb33341ff, 0xb63441ff, 0xb93540ff, 0xbb363fff, 0xbe373eff, 0xc0393dff, 0xc33a3cff, 0xc53c3cff, 0xc73d3bff, 0xc93f3aff, 0xcc4139ff, 0xce4338ff, 0xd04537ff, 0xd24737ff, 0xd34936ff, 0xd54b35ff, 0xd74e35ff, 0xd95034ff, 0xda5334ff, 0xdc5534ff, 0xde5733ff, 0xdf5a33ff, 0xe15c33ff, 0xe25f33ff, 0xe36233ff, 0xe56433ff, 0xe66734ff, 0xe76a34ff, 0xe86d35ff, 0xe96f36ff, 0xea7238ff, 0xeb753aff, 0xec783bff, 0xed7b3eff, 0xed7e40ff, 0xee8142ff, 0xef8445ff, 0xef8748ff, 0xf0894bff, 0xf18c4eff, 0xf18f51ff, 0xf29255ff, 0xf29558ff, 0xf3985bff, 0xf39a5fff, 0xf49d63ff, 0xf5a066ff, 0xf5a36aff, 0xf6a56dff, 0xf6a871ff, 0xf7ab75ff, 0xf7ae79ff, 0xf8b07cff, 0xf8b380ff, 0xf9b684ff, 0xfab887ff, 0xfabb8bff, 0xfbbe8fff, 0xfbc192ff, 0xfcc396ff, 0xfcc69aff, 0xfdc99eff, 0xfdcca1ff, 0xfecea5ff, 0xfed1a9ff, 0xffd4acff);
 preset!(flare; 0xedb081ff, 0xedaf80ff, 0xedae7fff, 0xedad7fff, 0xedac7eff, 0xedab7eff, 0xecaa7dff, 0xeca97cff, 0xeca87cff, 0xeca77bff, 0xeca67bff, 0xeca57aff, 0xeca479ff, 0xeca379ff, 0xeca278ff, 0xeca178ff, 0xeca077ff, 0xec9f76ff, 0xeb9e76ff, 0xeb9d75ff, 0xeb9c75ff, 0xeb9b74ff, 0xeb9a73ff, 0xeb9973ff, 0xeb9972ff, 0xeb9872ff, 0xeb9771ff, 0xea9671ff, 0xea9570ff, 0xea946fff, 0xea936fff, 0xea926eff, 0xea916eff, 0xea906dff, 0xea8f6cff, 0xea8e6cff, 0xe98d6bff, 0xe98c6bff, 0xe98b6aff, 0xe98a6aff, 0xe98969ff, 0xe98868ff, 0xe98768ff, 0xe98667ff, 0xe88567ff, 0xe88466ff, 0xe88366ff, 0xe88265ff, 0xe88165ff, 0xe88064ff, 0xe87f64ff, 0xe77e63ff, 0xe77d63ff, 0xe77c63ff, 0xe77b62ff, 0xe77a62ff, 0xe67961ff, 0xe67861ff, 0xe67760ff, 0xe67660ff, 0xe67560ff, 0xe5745fff, 0xe5735fff, 0xe5725fff, 0xe5715eff, 0xe5705eff, 0xe46f5eff, 0xe46e5eff, 0xe46d5dff, 0xe46c5dff, 0xe36b5dff, 0xe36a5dff, 0xe3695dff, 0xe3685cff, 0xe2675cff, 0xe2665cff, 0xe2655cff, 0xe1645cff, 0xe1635cff, 0xe1625cff, 0xe0615cff, 0xe0605cff, 0xe05f5cff, 0xdf5f5cff, 0xdf5e5cff, 0xde5d5cff, 0xde5c5cff, 0xde5b5cff, 0xdd5a5cff, 0xdd595cff, 0xdc585cff, 0xdc575cff, 0xdb565dff, 0xdb565dff, 0xda555dff, 0xda545dff, 0xd9535dff, 0xd9525eff, 0xd8525eff, 0xd7515eff, 0xd7505eff, 0xd64f5fff, 0xd64f5fff, 0xd54e5fff, 0xd44d60ff, 0xd44c60ff, 0xd34c60ff, 0xd24b60ff, 0xd24a61ff, 0xd14a61ff, 0xd04962ff, 0xd04962ff, 0xcf4862ff, 0xce4763ff, 0xcd4763ff, 0xcc4663ff, 0xcc4664ff, 0xcb4564ff, 0xca4564ff, 0xc94465ff, 0xc84465ff, 0xc84365ff, 0xc74366ff, 0xc64366ff, 0xc54266ff, 0xc44267ff, 0xc34167ff, 0xc24167ff, 0xc14168ff, 0xc14068ff, 0xc04068ff, 0xbf4069ff, 0xbe3f69ff, 0xbd3f69ff, 0xbc3f69ff, 0xbb3f6aff, 0xba3e6aff, 0xb93e6aff, 0xb83e6bff, 0xb73d6bff, 0xb63d6bff, 0xb53d6bff, 0xb43d6bff, 0xb33c6cff, 0xb23c6cff, 0xb13c6cff, 0xb13c6cff, 0xb03b6dff, 0xaf3b6dff, 0xae3b6dff, 0xad3b6dff, 0xac3a6dff, 0xab3a6dff, 0xaa3a6eff, 0xa93a6eff, 0xa8396eff, 0xa7396eff, 0xa6396eff, 0xa5396eff, 0xa4386fff, 0xa3386fff, 0xa2386fff, 0xa1386fff, 0xa1376fff, 0xa0376fff, 0x9f376fff, 0x9e3770ff, 0x9d3670ff, 0x9c3670ff, 0x9b3670ff, 0x9a3670ff, 0x993570ff, 0x983570ff, 0x973570ff, 0x963570ff, 0x953470ff, 0x943470ff, 0x943471ff, 0x933471ff, 0x923371ff, 0x913371ff, 0x903371ff, 0x8f3371ff, 0x8e3271ff, 0x8d3271ff, 0x8c3271ff, 0x8b3271ff, 0x8a3171ff, 0x893171ff, 0x883171ff, 0x873171ff, 0x873171ff, 0x863071ff, 0x853071ff, 0x843071ff, 0x833070ff, 0x822f70ff, 0x812f70ff, 0x802f70ff, 0x7f2f70ff, 0x7e2f70ff, 0x7d2e70ff, 0x7c2e70ff, 0x7b2e70ff, 0x7a2e70ff, 0x792e6fff, 0x782e6fff, 0x772d6fff, 0x762d6fff, 0x752d6fff, 0x752d6fff, 0x742d6eff, 0x732c6eff, 0x722c6eff, 0x712c6eff, 0x702c6eff, 0x6f2c6dff, 0x6e2c6dff, 0x6d2b6dff, 0x6c2b6dff, 0x6b2b6cff, 0x6a2b6cff, 0x692b6cff, 0x682a6cff, 0x672a6bff, 0x662a6bff, 0x652a6bff, 0x642a6aff, 0x642a6aff, 0x63296aff, 0x62296aff, 0x612969ff, 0x602969ff, 0x5f2969ff, 0x5e2868ff, 0x5d2868ff, 0x5c2868ff, 0x5b2867ff, 0x5a2767ff, 0x592767ff, 0x582766ff, 0x582766ff, 0x572766ff, 0x562666ff, 0x552665ff, 0x542665ff, 0x532665ff, 0x522564ff, 0x512564ff, 0x502564ff, 0x4f2463ff, 0x4f2463ff, 0x4e2463ff, 0x4d2463ff, 0x4c2362ff, 0x4b2362ff);

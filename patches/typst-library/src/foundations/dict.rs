@@ -3,15 +3,17 @@ use std::hash::{Hash, Hasher};
 use std::ops::{Add, AddAssign};
 use std::sync::Arc;
 
-use ecow::{eco_format, EcoString};
+use comemo::Tracked;
+use ecow::{EcoString, eco_format};
 use indexmap::IndexMap;
+use rustc_hash::FxBuildHasher;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use typst_syntax::is_ident;
-use typst_utils::ArcExt;
 
-use crate::diag::{Hint, HintedStrResult, StrResult};
+use crate::diag::{At, Hint, HintedStrResult, SourceResult, StrResult};
+use crate::engine::Engine;
 use crate::foundations::{
-    array, cast, func, repr, scope, ty, Array, Module, Repr, Str, Value,
+    Array, Context, Func, Module, Repr, Str, Value, array, cast, func, repr, scope, ty,
 };
 
 /// Create a new [`Dict`] from key-value pairs.
@@ -20,7 +22,7 @@ use crate::foundations::{
 macro_rules! __dict {
     ($($key:expr => $value:expr),* $(,)?) => {{
         #[allow(unused_mut)]
-        let mut map = $crate::foundations::IndexMap::new();
+        let mut map = $crate::foundations::IndexMap::default();
         $(map.insert($key.into(), $crate::foundations::IntoValue::into_value($value));)*
         $crate::foundations::Dict::from(map)
     }};
@@ -36,19 +38,28 @@ pub use crate::__dict as dict;
 /// empty parentheses already yield an empty array, you have to use the special
 /// `(:)` syntax to create an empty dictionary.
 ///
-/// A dictionary is conceptually similar to an array, but it is indexed by
-/// strings instead of integers. You can access and create dictionary entries
+/// A dictionary is conceptually similar to an @array[array], but it is indexed
+/// by strings instead of integers. You can access and create dictionary entries
 /// with the `.at()` method. If you know the key statically, you can
-/// alternatively use [field access notation]($scripting/#fields) (`.key`) to
-/// access the value. Dictionaries can be added with the `+` operator and
-/// [joined together]($scripting/#blocks). To check whether a key is present in
-/// the dictionary, use the `in` keyword.
+/// alternatively use @reference:scripting:fields[field access notation]
+/// (`.key`) to access the value. To check whether a key is present in the
+/// dictionary, use the `in` keyword.
 ///
-/// You can iterate over the pairs in a dictionary using a [for
-/// loop]($scripting/#loops). This will iterate in the order the pairs were
-/// inserted / declared.
+/// You can iterate over the pairs in a dictionary using a
+/// @reference:scripting:loops[for loop]. This will iterate in the order the
+/// pairs were inserted / declared initially.
 ///
-/// # Example
+/// Dictionaries can be added with the `+` operator and
+/// @reference:scripting:blocks[joined together]. They can also be
+/// @arguments:spreading[spread] into a function call or another dictionary
+/// #footnote[When spreading into a dictionary, if all items between the
+/// parentheses are spread, you have to begin the container with `(:`, as in
+/// `(: ..dict, ..other_dict)`. Otherwise the container is inferred to be an
+/// array and an error is raised.]
+/// with the `..spread` operator. In each case, if a key appears multiple times,
+/// the last value will override the others.
+///
+/// = Example <example>
 /// ```example
 /// #let dict = (
 ///   name: "Typst",
@@ -61,12 +72,12 @@ pub use crate::__dict as dict;
 /// #dict.keys() \
 /// #dict.values() \
 /// #dict.at("born") \
-/// #dict.insert("city", "Berlin ")
+/// #dict.insert("city", "Berlin")
 /// #("name" in dict)
 /// ```
 #[ty(scope, cast, name = "dictionary")]
 #[derive(Default, Clone, PartialEq)]
-pub struct Dict(Arc<IndexMap<Str, Value>>);
+pub struct Dict(Arc<IndexMap<Str, Value, FxBuildHasher>>);
 
 impl Dict {
     /// Create a new, empty dictionary.
@@ -114,7 +125,7 @@ impl Dict {
     }
 
     /// Iterate over pairs of references to the contained keys and values.
-    pub fn iter(&self) -> indexmap::map::Iter<Str, Value> {
+    pub fn iter(&self) -> indexmap::map::Iter<'_, Str, Value> {
         self.0.iter()
     }
 
@@ -165,6 +176,7 @@ impl Dict {
     /// Note that this function is only intended for conversion of a
     /// dictionary-like value to a dictionary, not for creation of a dictionary
     /// from individual pairs. Use the dictionary syntax `(key: value)` instead.
+    /// Also see @array.to-dict for converting arrays to dictionaries.
     ///
     /// ```example
     /// #dictionary(sys).at("version")
@@ -184,10 +196,14 @@ impl Dict {
     }
 
     /// Returns the value associated with the specified key in the dictionary.
+    ///
     /// May be used on the left-hand side of an assignment if the key is already
     /// present in the dictionary. Returns the default value if the key is not
     /// part of the dictionary or fails with an error if no default value was
     /// specified.
+    ///
+    /// Values may also be accessed with field syntax (e.g. `{(key: 42).key}`)
+    /// if no default is needed.
     #[func]
     pub fn at(
         &self,
@@ -206,6 +222,9 @@ impl Dict {
 
     /// Inserts a new pair into the dictionary. If the dictionary already
     /// contains this key, the value is updated.
+    ///
+    /// To insert multiple pairs at once, you can alternatively add another
+    /// dictionary with the `+=` operator.
     #[func]
     pub fn insert(
         &mut self,
@@ -252,6 +271,70 @@ impl Dict {
         self.0
             .iter()
             .map(|(k, v)| Value::Array(array![k.clone(), v.clone()]))
+            .collect()
+    }
+
+    /// Produces a new dictionary with only the pairs from the original one for
+    /// which the given function returns `{true}`.
+    ///
+    /// #example(
+    ///   title: "Basic usage",
+    ///   ```
+    ///   #{
+    ///     (a: 0, b: 1, c: 2)
+    ///       .filter(v => v > 0)
+    ///   }
+    ///   ```
+    /// )
+    ///
+    /// #example(
+    ///   title: "Filtering based on the key instead of the value",
+    ///   ```
+    ///   #{
+    ///     (a: 0, b: 1, c: 2)
+    ///       .pairs()
+    ///       .filter(((k, v)) => k != "a")
+    ///       .to-dict()
+    ///   }
+    ///   ```
+    /// )
+    #[func]
+    pub fn filter(
+        self,
+        engine: &mut Engine,
+        context: Tracked<Context>,
+        /// The function to apply to each value. Must return a boolean.
+        test: Func,
+    ) -> SourceResult<Dict> {
+        let mut run_test = |v: &Value| {
+            test.call(engine, context, [v.clone()])?
+                .cast::<bool>()
+                .at(test.span())
+        };
+        self.into_iter()
+            .filter_map(|(k, v)| run_test(&v).map(|b| b.then_some((k, v))).transpose())
+            .collect()
+    }
+
+    /// Produces a new dictionary where the keys are the same, but the values
+    /// are transformed with the given function.
+    ///
+    /// ```example
+    /// #(a: 0, b: 1, c: 2).map(v => v + 1)
+    /// ```
+    #[func]
+    pub fn map(
+        self,
+        engine: &mut Engine,
+        context: Tracked<Context>,
+        /// The function to apply to each value.
+        mapper: Func,
+    ) -> SourceResult<Dict> {
+        self.into_iter()
+            .map(|(k, v)| {
+                let mapped_value = mapper.call(engine, context, [v])?;
+                Ok((k, mapped_value))
+            })
             .collect()
     }
 }
@@ -343,7 +426,7 @@ impl<'de> Deserialize<'de> for Dict {
     where
         D: Deserializer<'de>,
     {
-        Ok(IndexMap::<Str, Value>::deserialize(deserializer)?.into())
+        Ok(IndexMap::<Str, Value, FxBuildHasher>::deserialize(deserializer)?.into())
     }
 }
 
@@ -364,7 +447,7 @@ impl IntoIterator for Dict {
     type IntoIter = indexmap::map::IntoIter<Str, Value>;
 
     fn into_iter(self) -> Self::IntoIter {
-        Arc::take(self.0).into_iter()
+        Arc::unwrap_or_clone(self.0).into_iter()
     }
 }
 
@@ -377,8 +460,8 @@ impl<'a> IntoIterator for &'a Dict {
     }
 }
 
-impl From<IndexMap<Str, Value>> for Dict {
-    fn from(map: IndexMap<Str, Value>) -> Self {
+impl From<IndexMap<Str, Value, FxBuildHasher>> for Dict {
+    fn from(map: IndexMap<Str, Value, FxBuildHasher>) -> Self {
         Self(Arc::new(map))
     }
 }

@@ -1,15 +1,14 @@
 //! Finished documents.
 
 use std::fmt::{self, Debug, Formatter};
-use std::num::NonZeroUsize;
 use std::sync::Arc;
 
 use typst_syntax::Span;
 use typst_utils::{LazyHash, Numeric};
 
-use crate::foundations::{cast, dict, Dict, Label, Value};
+use crate::foundations::Label;
 use crate::introspection::{Location, Tag};
-use crate::layout::{Abs, Axes, FixedAlignment, Length, Point, Size, Transform};
+use crate::layout::{Abs, Axes, FixedAlignment, Point, Size, Transform};
 use crate::model::Destination;
 use crate::text::TextItem;
 use crate::visualize::{Color, Curve, FixedStroke, Geometry, Image, Paint, Shape};
@@ -34,7 +33,7 @@ pub struct Frame {
 impl Frame {
     /// Create a new, empty frame.
     ///
-    /// Panics the size is not finite.
+    /// Panics if the size is not finite.
     #[track_caller]
     pub fn new(size: Size, kind: FrameKind) -> Self {
         assert!(size.is_finite());
@@ -121,6 +120,13 @@ impl Frame {
     /// Set the frame's baseline from the top.
     pub fn set_baseline(&mut self, baseline: Abs) {
         self.baseline = Some(baseline);
+    }
+
+    /// Remove the frame's natural baseline. This might be needed after
+    /// applying a certain transformation that would invalidate the baseline
+    /// position, in such a way that the ideal new position is not clear.
+    pub fn clear_baseline(&mut self) {
+        self.baseline = None;
     }
 
     /// The distance from the baseline to the top of the frame.
@@ -212,6 +218,11 @@ impl Frame {
         }
     }
 
+    /// Filters out items in the frame in-place.
+    pub fn retain(&mut self, mut filter: impl FnMut(&mut FrameItem) -> bool) {
+        Arc::make_mut(&mut self.items).retain_mut(|(_, item)| filter(item));
+    }
+
     /// Whether the given frame should be inlined.
     fn should_inline(&self, frame: &Frame) -> bool {
         // We do not inline big frames and hard frames.
@@ -301,9 +312,18 @@ impl Frame {
         }
     }
 
+    /// Move the contents of the frame without changing the baseline.
+    pub fn translate_visual(&mut self, offset: Point) {
+        if !offset.is_zero() {
+            for (point, _) in Arc::make_mut(&mut self.items).iter_mut() {
+                *point += offset;
+            }
+        }
+    }
+
     /// Hide all content in the frame, but keep metadata.
     pub fn hide(&mut self) {
-        Arc::make_mut(&mut self.items).retain_mut(|(_, item)| match item {
+        self.retain(|item| match item {
             FrameItem::Group(group) => {
                 group.frame.hide();
                 !group.frame.is_empty()
@@ -346,7 +366,7 @@ impl Frame {
 
     /// Set a parent for the frame. As a result, all elements in the frame
     /// become logically ordered immediately after the given location.
-    pub fn set_parent(&mut self, parent: Location) {
+    pub fn set_parent(&mut self, parent: FrameParent) {
         if !self.is_empty() {
             self.group(|g| g.parent = Some(parent));
         }
@@ -435,7 +455,7 @@ impl Debug for Frame {
 /// This corresponds to whether or not the frame is considered to be the
 /// innermost parent of its contents. This is used to determine the coordinate
 /// reference system for gradients.
-#[derive(Default, Clone, Copy, PartialEq, Eq, Hash, Debug)]
+#[derive(Debug, Default, Copy, Clone, Eq, PartialEq, Hash)]
 pub enum FrameKind {
     /// A container which follows its parent's size.
     ///
@@ -503,8 +523,10 @@ pub struct GroupItem {
     /// The group's label.
     pub label: Option<Label>,
     /// The group's logical parent. All elements in this group are logically
-    /// ordered immediately after the parent's start location.
-    pub parent: Option<Location>,
+    /// ordered immediately after the parent's start location. This can be
+    /// thought of as inserting the elements at the end but still inside of the
+    /// parent.
+    pub parent: Option<FrameParent>,
 }
 
 impl GroupItem {
@@ -527,33 +549,48 @@ impl Debug for GroupItem {
     }
 }
 
-/// A physical position in a document.
+/// The parent of a [`GroupItem`]. The child will be logically ordered at the
+/// end but still inside of the parent.
 #[derive(Debug, Copy, Clone, Eq, PartialEq, Hash)]
-pub struct Position {
-    /// The page, starting at 1.
-    pub page: NonZeroUsize,
-    /// The exact coordinates on the page (from the top left, as usual).
-    pub point: Point,
+pub struct FrameParent {
+    /// The location of the parent element.
+    pub location: Location,
+    /// Whether the child has inherited the parent's styles.
+    pub inherit: Inherit,
 }
 
-cast! {
-    Position,
-    self => Value::Dict(self.into()),
-    mut dict: Dict => {
-        let page = dict.take("page")?.cast()?;
-        let x: Length = dict.take("x")?.cast()?;
-        let y: Length = dict.take("y")?.cast()?;
-        dict.finish(&["page", "x", "y"])?;
-        Self { page, point: Point::new(x.abs, y.abs) }
-    },
-}
-
-impl From<Position> for Dict {
-    fn from(pos: Position) -> Self {
-        dict! {
-            "page" => pos.page,
-            "x" => pos.point.x,
-            "y" => pos.point.y,
-        }
+impl FrameParent {
+    /// Create a new frame parent.
+    pub const fn new(location: Location, inherit: Inherit) -> Self {
+        Self { location, inherit }
     }
+}
+
+/// Whether the child has inherited the parent's styles.
+///
+/// # Inherited
+///
+/// The placed text will inherit the styles from its parent (the place element).
+/// So `explanation` will be underlined.
+///
+/// ```typ
+/// #underline[
+///   Some text #place(float: true, bottom + right)[explanation].
+/// ]
+/// ```
+///
+/// # Not Inherited
+///
+/// The footnote entry won't inherit the styles from it's parent (the footnote).
+/// So `explanation` won't be underlined, unless other styles apply.
+///
+/// ```typ
+/// #underline[
+///   Some text #footnote[explanation].
+/// ]
+/// ```
+#[derive(Debug, Copy, Clone, Eq, PartialEq, Hash)]
+pub enum Inherit {
+    Yes,
+    No,
 }

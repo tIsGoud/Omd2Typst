@@ -2,19 +2,15 @@ use std::f64::consts::PI;
 
 use typst_syntax::Span;
 
-use crate::diag::SourceResult;
-use crate::engine::Engine;
-use crate::foundations::{
-    elem, func, scope, Content, NativeElement, Packed, Show, Smart, StyleChain,
-};
-use crate::layout::{Axes, BlockElem, Em, Length, Rel};
+use crate::foundations::{Content, NativeElement, Smart, elem, func, scope};
+use crate::layout::{Angle, Axes, Em, Length, Ratio, Rel};
 use crate::visualize::{FillRule, Paint, Stroke};
 
 /// A closed polygon.
 ///
 /// The polygon is defined by its corner points and is closed automatically.
 ///
-/// # Example
+/// = Example <example>
 /// ```example
 /// #polygon(
 ///   fill: blue.lighten(80%),
@@ -25,7 +21,7 @@ use crate::visualize::{FillRule, Paint, Stroke};
 ///   (0%,  2cm),
 /// )
 /// ```
-#[elem(scope, Show)]
+#[elem(scope)]
 pub struct PolygonElem {
     /// How to fill the polygon.
     ///
@@ -35,20 +31,19 @@ pub struct PolygonElem {
 
     /// The drawing rule used to fill the polygon.
     ///
-    /// See the [curve documentation]($curve.fill-rule) for an example.
+    /// See the @curve.fill-rule[curve documentation] for an example.
     #[default]
     pub fill_rule: FillRule,
 
-    /// How to [stroke] the polygon. This can be:
+    /// How to @stroke[stroke] the polygon.
     ///
-    /// Can be set to  `{none}` to disable the stroke or to `{auto}` for a
-    /// stroke of `{1pt}` black if and if only if no fill is given.
-    #[resolve]
+    /// Can be set to `{none}` to disable the stroke or to `{auto}` for a stroke
+    /// of `{1pt}` black if and only if no fill is given.
     #[fold]
     pub stroke: Smart<Option<Stroke>>,
 
     /// The vertices of the polygon. Each point is specified as an array of two
-    /// [relative lengths]($relative).
+    /// @relative[relative lengths].
     #[variadic]
     pub vertices: Vec<Axes<Rel<Length>>>,
 }
@@ -70,17 +65,18 @@ impl PolygonElem {
         span: Span,
 
         /// How to fill the polygon. See the general
-        /// [polygon's documentation]($polygon.fill) for more details.
+        /// @polygon.fill[polygon's documentation] for more details.
         #[named]
         fill: Option<Option<Paint>>,
 
         /// How to stroke the polygon. See the general
-        /// [polygon's documentation]($polygon.stroke) for more details.
+        /// @polygon.stroke[polygon's documentation] for more details.
         #[named]
         stroke: Option<Smart<Option<Stroke>>>,
 
-        /// The diameter of the [circumcircle](https://en.wikipedia.org/wiki/Circumcircle)
-        /// of the regular polygon.
+        /// The diameter of the
+        /// #link("https://en.wikipedia.org/wiki/Circumcircle")[circumcircle] of
+        /// the regular polygon.
         #[named]
         #[default(Em::one().into())]
         size: Length,
@@ -92,7 +88,9 @@ impl PolygonElem {
     ) -> Content {
         let radius = size / 2.0;
         let angle = |i: f64| {
-            2.0 * PI * i / (vertices as f64) + PI * (1.0 / 2.0 - 1.0 / vertices as f64)
+            let offset = Angle::rad(PI * (1.0 / 2.0 - 1.0 / vertices as f64));
+            let rotation = Angle::from_ratio(Ratio::new(i / vertices as f64));
+            offset + rotation
         };
         let (horizontal_offset, vertical_offset) = (0..=vertices)
             .map(|v| {
@@ -117,19 +115,11 @@ impl PolygonElem {
 
         let mut elem = PolygonElem::new(vertices);
         if let Some(fill) = fill {
-            elem.push_fill(fill);
+            elem.fill.set(fill);
         }
         if let Some(stroke) = stroke {
-            elem.push_stroke(stroke);
+            elem.stroke.set(stroke);
         }
         elem.pack().spanned(span)
-    }
-}
-
-impl Show for Packed<PolygonElem> {
-    fn show(&self, engine: &mut Engine, _: StyleChain) -> SourceResult<Content> {
-        Ok(BlockElem::single_layouter(self.clone(), engine.routines.layout_polygon)
-            .pack()
-            .spanned(self.span()))
     }
 }

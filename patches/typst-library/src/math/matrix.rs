@@ -1,12 +1,12 @@
-use smallvec::{smallvec, SmallVec};
+use smallvec::{SmallVec, smallvec};
 use typst_syntax::Spanned;
-use typst_utils::{default_math_class, Numeric};
+use typst_utils::{Numeric, default_math_class};
 use unicode_math_class::MathClass;
 
-use crate::diag::{bail, At, HintedStrResult, StrResult};
+use crate::diag::{At, HintedStrResult, StrResult, bail};
 use crate::foundations::{
-    array, cast, dict, elem, Array, Content, Dict, Fold, NoneValue, Resolve, Smart,
-    StyleChain, Symbol, Value,
+    Array, Content, Dict, Fold, NoneValue, Resolve, Smart, StyleChain, Symbol, Value,
+    array, cast, dict, elem,
 };
 use crate::layout::{Abs, Em, HAlignment, Length, Rel};
 use crate::math::Mathy;
@@ -18,9 +18,13 @@ const DEFAULT_COL_GAP: Em = Em::new(0.5);
 /// A column vector.
 ///
 /// Content in the vector's elements can be aligned with the
-/// [`align`]($math.vec.align) parameter, or the `&` symbol.
+/// @math.vec.align[`align`] parameter, or the `&` symbol.
 ///
-/// # Example
+/// This function is for typesetting vector components. To typeset a symbol that
+/// represents a vector, @math.accent[`arrow`] and @math.bold[`bold`] are
+/// commonly used.
+///
+/// = Example <example>
 /// ```example
 /// $ vec(a, b, c) dot vec(1, 2, 3)
 ///     = a + 2b + 3c $
@@ -46,7 +50,6 @@ pub struct VecElem {
     /// #set math.vec(align: right)
     /// $ vec(-1, 1, -1) $
     /// ```
-    #[resolve]
     #[default(HAlignment::Center)]
     pub align: HAlignment,
 
@@ -56,7 +59,6 @@ pub struct VecElem {
     /// #set math.vec(gap: 1em)
     /// $ vec(1, 2) $
     /// ```
-    #[resolve]
     #[default(DEFAULT_ROW_GAP.into())]
     pub gap: Rel<Length>,
 
@@ -73,11 +75,11 @@ pub struct VecElem {
 /// special syntax of math function calls to define custom functions that take
 /// 2D data.
 ///
-/// Content in cells can be aligned with the [`align`]($math.mat.align)
-/// parameter, or content in cells that are in the same row can be aligned with
-/// the `&` symbol.
+/// Content in cells can be aligned with the @math.mat.align[`align`] parameter,
+/// or content in cells that are in the same row can be aligned with the `&`
+/// symbol.
 ///
-/// # Example
+/// = Example <example>
 /// ```example
 /// $ mat(
 ///   1, 2, ..., 10;
@@ -107,41 +109,46 @@ pub struct MatElem {
     /// #set math.mat(align: right)
     /// $ mat(-1, 1, 1; 1, -1, 1; 1, 1, -1) $
     /// ```
-    #[resolve]
     #[default(HAlignment::Center)]
     pub align: HAlignment,
 
     /// Draws augmentation lines in a matrix.
     ///
     /// - `{none}`: No lines are drawn.
-    /// - A single number: A vertical augmentation line is drawn
-    ///   after the specified column number. Negative numbers start from the end.
+    /// - A single number: A vertical augmentation line is drawn after the
+    ///   specified column number. Negative numbers start from the end.
     /// - A dictionary: With a dictionary, multiple augmentation lines can be
     ///   drawn both horizontally and vertically. Additionally, the style of the
     ///   lines can be set. The dictionary can contain the following keys:
-    ///   - `hline`: The offsets at which horizontal lines should be drawn.
-    ///     For example, an offset of `2` would result in a horizontal line
-    ///     being drawn after the second row of the matrix. Accepts either an
-    ///     integer for a single line, or an array of integers
-    ///     for multiple lines. Like for a single number, negative numbers start from the end.
-    ///   - `vline`: The offsets at which vertical lines should be drawn.
-    ///     For example, an offset of `2` would result in a vertical line being
+    ///   - `hline`: The offsets at which horizontal lines should be drawn. For
+    ///     example, an offset of `2` would result in a horizontal line being
+    ///     drawn after the second row of the matrix. Accepts either an integer
+    ///     for a single line, or an array of integers for multiple lines. Like
+    ///     for a single number, negative numbers start from the end.
+    ///   - `vline`: The offsets at which vertical lines should be drawn. For
+    ///     example, an offset of `2` would result in a vertical line being
     ///     drawn after the second column of the matrix. Accepts either an
-    ///     integer for a single line, or an array of integers
-    ///     for multiple lines. Like for a single number, negative numbers start from the end.
-    ///   - `stroke`: How to [stroke]($stroke) the line. If set to `{auto}`,
-    ///     takes on a thickness of 0.05em and square line caps.
+    ///     integer for a single line, or an array of integers for multiple
+    ///     lines. Like for a single number, negative numbers start from the
+    ///     end.
+    ///   - `stroke`: How to @stroke[stroke] the line. If set to `{auto}`, takes
+    ///     on a thickness of 0.05 em and square line caps.
     ///
-    /// ```example
-    /// $ mat(1, 0, 1; 0, 1, 2; augment: #2) $
-    /// // Equivalent to:
-    /// $ mat(1, 0, 1; 0, 1, 2; augment: #(-1)) $
-    /// ```
+    /// #example(
+    ///   title: "Basic usage",
+    ///   ```
+    ///   $ mat(1, 0, 1; 0, 1, 2; augment: #2) $
+    ///   // Equivalent to:
+    ///   $ mat(1, 0, 1; 0, 1, 2; augment: #(-1)) $
+    ///   ```
+    /// )
     ///
-    /// ```example
-    /// $ mat(0, 0, 0; 1, 1, 1; augment: #(hline: 1, stroke: 2pt + green)) $
-    /// ```
-    #[resolve]
+    /// #example(
+    ///   title: "Customizing the augmentation line",
+    ///   ```
+    ///   $ mat(0, 0, 0; 1, 1, 1; augment: #(hline: 1, stroke: 2pt + green)) $
+    ///   ```
+    /// )
     #[fold]
     pub augment: Option<Augment>,
 
@@ -162,7 +169,6 @@ pub struct MatElem {
     /// #set math.mat(row-gap: 1em)
     /// $ mat(1, 2; 3, 4) $
     /// ```
-    #[resolve]
     #[parse(
         let gap = args.named("gap")?;
         args.named("row-gap")?.or(gap)
@@ -176,7 +182,6 @@ pub struct MatElem {
     /// #set math.mat(column-gap: 1em)
     /// $ mat(1, 2; 3, 4) $
     /// ```
-    #[resolve]
     #[parse(args.named("column-gap")?.or(gap))]
     #[default(DEFAULT_COL_GAP.into())]
     pub column_gap: Rel<Length>,
@@ -220,7 +225,7 @@ pub struct MatElem {
 ///
 /// Content across different branches can be aligned with the `&` symbol.
 ///
-/// # Example
+/// = Example <example>
 /// ```example
 /// $ f(x, y) := cases(
 ///   1 "if" (x dot y)/2 <= 0,
@@ -259,7 +264,6 @@ pub struct CasesElem {
     /// #set math.cases(gap: 1em)
     /// $ x = cases(1, 2) $
     /// ```
-    #[resolve]
     #[default(DEFAULT_ROW_GAP.into())]
     pub gap: Rel<Length>,
 
@@ -281,7 +285,7 @@ cast! {
     Delimiter,
     self => self.0.into_value(),
     _: NoneValue => Self::none(),
-    v: Symbol => Self::char(v.get())?,
+    v: Symbol => Self::char(v.get().parse::<char>().map_err(|_| "expected a single-codepoint symbol")?)?,
     v: char => Self::char(v)?,
 }
 
@@ -295,7 +299,7 @@ impl Delimiter {
             default_math_class(c),
             Some(MathClass::Opening | MathClass::Closing | MathClass::Fence),
         ) {
-            bail!("invalid delimiter: \"{}\"", c)
+            bail!("invalid delimiter: \"{c}\"")
         }
         Ok(Self(Some(c)))
     }

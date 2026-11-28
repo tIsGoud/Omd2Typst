@@ -1,5 +1,28 @@
 # Release Notes
 
+## v0.19.0 — PDF embeds in the CLI, Typst 0.15
+
+**The CLI now includes embedded PDFs**, the same way the Obsidian plugin does.
+`![[annex.pdf]]` and `![[annex.pdf#page=5,6,7]]` become pages of the document,
+so an annex keeps the document's page numbering and chapter headings.
+
+- **New option `--pdf-embeds fit|full|skip|off`.** The default is `fit` (every PDF
+  page inside the margins, with the document's header and footer), as in the
+  plugin. `full` makes full pages without margins, header and footer, `skip`
+  leaves the embed out, and `off` shows the "Embed not supported" placeholder.
+- **Page counts are read by the CLI.** Typst cannot count the pages of a PDF, so
+  the CLI reads each PDF itself (relative to the current directory, like
+  images). A PDF it cannot read stays a placeholder, with a warning. The page
+  selection syntax is unchanged (`#page=3`, `#page=2-4`, `#page=3,5,7`).
+- **Typst 0.15 embedded** (was 0.13), the first version that includes PDF pages.
+  The example documents render the same: same fonts and layout, only the
+  syntax colours in code blocks and the footnote marks differ slightly. The
+  binary is about 7 MB larger. A `.typ` file made with PDF embeds compiles with
+  the system Typst only from version 0.14.
+- **Clearer warnings.** The warning for an embed that is left out now names the
+  reason: a switched-off PDF points to `--pdf-embeds`, and only Obsidian Bases
+  embeds mention the plugin.
+
 ## v0.18.0 — PDF embeds
 
 **PDF pages in the document.** The engine can now include the pages of an

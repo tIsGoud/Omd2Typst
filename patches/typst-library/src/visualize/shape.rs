@@ -1,14 +1,11 @@
-use crate::diag::SourceResult;
-use crate::engine::Engine;
-use crate::foundations::{
-    elem, Cast, Content, NativeElement, Packed, Show, Smart, StyleChain,
-};
-use crate::layout::{Abs, BlockElem, Corners, Length, Point, Rel, Sides, Size, Sizing};
+use crate::foundations::{Cast, Content, Smart, elem};
+use crate::layout::{Abs, Corners, Length, Point, Rect, Rel, Sides, Size, Sizing};
 use crate::visualize::{Curve, FixedStroke, Paint, Stroke};
+use kurbo::{PathEl, Shape as _};
 
 /// A rectangle with optional content.
 ///
-/// # Example
+/// = Example <example>
 /// ```example
 /// // Without content.
 /// #rect(width: 35%, height: 30pt)
@@ -19,7 +16,7 @@ use crate::visualize::{Curve, FixedStroke, Paint, Stroke};
 ///   to fit the content.
 /// ]
 /// ```
-#[elem(title = "Rectangle", Show)]
+#[elem(title = "Rectangle")]
 pub struct RectElem {
     /// The rectangle's width, relative to its parent container.
     pub width: Smart<Rel<Length>>,
@@ -40,19 +37,26 @@ pub struct RectElem {
     /// How to stroke the rectangle. This can be:
     ///
     /// - `{none}` to disable stroking
-    /// - `{auto}` for a stroke of `{1pt + black}` if and if only if no fill is
+    ///
+    /// - `{auto}` for a stroke of `{1pt + black}` if and only if no fill is
     ///   given.
-    /// - Any kind of [stroke]
+    ///
+    /// - Any kind of @stroke[stroke]
+    ///
     /// - A dictionary describing the stroke for each side individually. The
     ///   dictionary can contain the following keys in order of precedence:
+    ///
     ///   - `top`: The top stroke.
     ///   - `right`: The right stroke.
     ///   - `bottom`: The bottom stroke.
     ///   - `left`: The left stroke.
-    ///   - `x`: The horizontal stroke.
-    ///   - `y`: The vertical stroke.
+    ///   - `x`: The left and right stroke.
+    ///   - `y`: The top and bottom stroke.
     ///   - `rest`: The stroke on all sides except those for which the
     ///     dictionary explicitly sets a size.
+    ///
+    ///   All keys are optional; omitted keys will use their previously set
+    ///   value, or the default stroke if never set.
     ///
     /// ```example
     /// #stack(
@@ -63,7 +67,6 @@ pub struct RectElem {
     ///   rect(stroke: 2pt + red),
     /// )
     /// ```
-    #[resolve]
     #[fold]
     pub stroke: Smart<Sides<Option<Option<Stroke>>>>,
 
@@ -71,6 +74,7 @@ pub struct RectElem {
     /// the width and height divided by two. This can be:
     ///
     /// - A relative length for a uniform corner radius.
+    ///
     /// - A dictionary: With a dictionary, the stroke for each side can be set
     ///   individually. The dictionary can contain the following keys in order
     ///   of precedence:
@@ -101,20 +105,17 @@ pub struct RectElem {
     ///   ),
     /// )
     /// ```
-    #[resolve]
     #[fold]
     pub radius: Corners<Option<Rel<Length>>>,
 
-    /// How much to pad the rectangle's content.
-    /// See the [box's documentation]($box.outset) for more details.
-    #[resolve]
+    /// How much to pad the rectangle's content. See the
+    /// @box.inset[box's documentation] for more details.
     #[fold]
     #[default(Sides::splat(Some(Abs::pt(5.0).into())))]
     pub inset: Sides<Option<Rel<Length>>>,
 
     /// How much to expand the rectangle's size without affecting the layout.
-    /// See the [box's documentation]($box.outset) for more details.
-    #[resolve]
+    /// See the @box.outset[box's documentation] for more details.
     #[fold]
     pub outset: Sides<Option<Rel<Length>>>,
 
@@ -123,23 +124,12 @@ pub struct RectElem {
     /// When this is omitted, the rectangle takes on a default size of at most
     /// `{45pt}` by `{30pt}`.
     #[positional]
-    #[borrowed]
     pub body: Option<Content>,
-}
-
-impl Show for Packed<RectElem> {
-    fn show(&self, engine: &mut Engine, styles: StyleChain) -> SourceResult<Content> {
-        Ok(BlockElem::single_layouter(self.clone(), engine.routines.layout_rect)
-            .with_width(self.width(styles))
-            .with_height(self.height(styles))
-            .pack()
-            .spanned(self.span()))
-    }
 }
 
 /// A square with optional content.
 ///
-/// # Example
+/// = Example <example>
 /// ```example
 /// // Without content.
 /// #square(size: 40pt)
@@ -150,7 +140,7 @@ impl Show for Packed<RectElem> {
 ///   sized to fit.
 /// ]
 /// ```
-#[elem(Show)]
+#[elem]
 pub struct SquareElem {
     /// The square's side length. This is mutually exclusive with `width` and
     /// `height`.
@@ -180,32 +170,28 @@ pub struct SquareElem {
     })]
     pub height: Sizing,
 
-    /// How to fill the square. See the [rectangle's documentation]($rect.fill)
+    /// How to fill the square. See the @rect.fill[rectangle's documentation]
     /// for more details.
     pub fill: Option<Paint>,
 
     /// How to stroke the square. See the
-    /// [rectangle's documentation]($rect.stroke) for more details.
-    #[resolve]
+    /// @rect.stroke[rectangle's documentation] for more details.
     #[fold]
     pub stroke: Smart<Sides<Option<Option<Stroke>>>>,
 
     /// How much to round the square's corners. See the
-    /// [rectangle's documentation]($rect.radius) for more details.
-    #[resolve]
+    /// @rect.radius[rectangle's documentation] for more details.
     #[fold]
     pub radius: Corners<Option<Rel<Length>>>,
 
     /// How much to pad the square's content. See the
-    /// [box's documentation]($box.inset) for more details.
-    #[resolve]
+    /// @box.inset[box's documentation] for more details.
     #[fold]
     #[default(Sides::splat(Some(Abs::pt(5.0).into())))]
     pub inset: Sides<Option<Rel<Length>>>,
 
     /// How much to expand the square's size without affecting the layout. See
-    /// the [box's documentation]($box.outset) for more details.
-    #[resolve]
+    /// the @box.outset[box's documentation] for more details.
     #[fold]
     pub outset: Sides<Option<Rel<Length>>>,
 
@@ -215,23 +201,12 @@ pub struct SquareElem {
     /// When this is omitted, the square takes on a default size of at most
     /// `{30pt}`.
     #[positional]
-    #[borrowed]
     pub body: Option<Content>,
-}
-
-impl Show for Packed<SquareElem> {
-    fn show(&self, engine: &mut Engine, styles: StyleChain) -> SourceResult<Content> {
-        Ok(BlockElem::single_layouter(self.clone(), engine.routines.layout_square)
-            .with_width(self.width(styles))
-            .with_height(self.height(styles))
-            .pack()
-            .spanned(self.span()))
-    }
 }
 
 /// An ellipse with optional content.
 ///
-/// # Example
+/// = Example <example>
 /// ```example
 /// // Without content.
 /// #ellipse(width: 35%, height: 30pt)
@@ -243,7 +218,7 @@ impl Show for Packed<SquareElem> {
 ///   to fit the content.
 /// ]
 /// ```
-#[elem(Show)]
+#[elem]
 pub struct EllipseElem {
     /// The ellipse's width, relative to its parent container.
     pub width: Smart<Rel<Length>>,
@@ -251,26 +226,23 @@ pub struct EllipseElem {
     /// The ellipse's height, relative to its parent container.
     pub height: Sizing,
 
-    /// How to fill the ellipse. See the [rectangle's documentation]($rect.fill)
+    /// How to fill the ellipse. See the @rect.fill[rectangle's documentation]
     /// for more details.
     pub fill: Option<Paint>,
 
     /// How to stroke the ellipse. See the
-    /// [rectangle's documentation]($rect.stroke) for more details.
-    #[resolve]
+    /// @rect.stroke[rectangle's documentation] for more details.
     #[fold]
     pub stroke: Smart<Option<Stroke>>,
 
     /// How much to pad the ellipse's content. See the
-    /// [box's documentation]($box.inset) for more details.
-    #[resolve]
+    /// @box.inset[box's documentation] for more details.
     #[fold]
     #[default(Sides::splat(Some(Abs::pt(5.0).into())))]
     pub inset: Sides<Option<Rel<Length>>>,
 
     /// How much to expand the ellipse's size without affecting the layout. See
-    /// the [box's documentation]($box.outset) for more details.
-    #[resolve]
+    /// the @box.outset[box's documentation] for more details.
     #[fold]
     pub outset: Sides<Option<Rel<Length>>>,
 
@@ -279,23 +251,12 @@ pub struct EllipseElem {
     /// When this is omitted, the ellipse takes on a default size of at most
     /// `{45pt}` by `{30pt}`.
     #[positional]
-    #[borrowed]
     pub body: Option<Content>,
-}
-
-impl Show for Packed<EllipseElem> {
-    fn show(&self, engine: &mut Engine, styles: StyleChain) -> SourceResult<Content> {
-        Ok(BlockElem::single_layouter(self.clone(), engine.routines.layout_ellipse)
-            .with_width(self.width(styles))
-            .with_height(self.height(styles))
-            .pack()
-            .spanned(self.span()))
-    }
 }
 
 /// A circle with optional content.
 ///
-/// # Example
+/// = Example <example>
 /// ```example
 /// // Without content.
 /// #circle(radius: 25pt)
@@ -307,7 +268,7 @@ impl Show for Packed<EllipseElem> {
 ///   sized to fit.
 /// ]
 /// ```
-#[elem(Show)]
+#[elem]
 pub struct CircleElem {
     /// The circle's radius. This is mutually exclusive with `width` and
     /// `height`.
@@ -341,45 +302,31 @@ pub struct CircleElem {
     })]
     pub height: Sizing,
 
-    /// How to fill the circle. See the [rectangle's documentation]($rect.fill)
+    /// How to fill the circle. See the @rect.fill[rectangle's documentation]
     /// for more details.
     pub fill: Option<Paint>,
 
     /// How to stroke the circle. See the
-    /// [rectangle's documentation]($rect.stroke) for more details.
-    #[resolve]
+    /// @rect.stroke[rectangle's documentation] for more details.
     #[fold]
     #[default(Smart::Auto)]
     pub stroke: Smart<Option<Stroke>>,
 
     /// How much to pad the circle's content. See the
-    /// [box's documentation]($box.inset) for more details.
-    #[resolve]
+    /// @box.inset[box's documentation] for more details.
     #[fold]
     #[default(Sides::splat(Some(Abs::pt(5.0).into())))]
     pub inset: Sides<Option<Rel<Length>>>,
 
     /// How much to expand the circle's size without affecting the layout. See
-    /// the [box's documentation]($box.outset) for more details.
-    #[resolve]
+    /// the @box.outset[box's documentation] for more details.
     #[fold]
     pub outset: Sides<Option<Rel<Length>>>,
 
     /// The content to place into the circle. The circle expands to fit this
     /// content, keeping the 1-1 aspect ratio.
     #[positional]
-    #[borrowed]
     pub body: Option<Content>,
-}
-
-impl Show for Packed<CircleElem> {
-    fn show(&self, engine: &mut Engine, styles: StyleChain) -> SourceResult<Content> {
-        Ok(BlockElem::single_layouter(self.clone(), engine.routines.layout_circle)
-            .with_width(self.width(styles))
-            .with_height(self.height(styles))
-            .pack()
-            .spanned(self.span()))
-    }
 }
 
 /// A geometric shape with optional fill and stroke.
@@ -393,6 +340,15 @@ pub struct Shape {
     pub fill_rule: FillRule,
     /// The shape's border stroke.
     pub stroke: Option<FixedStroke>,
+}
+
+impl Shape {
+    /// The bounding box of the shape,
+    /// optionally taking the stroke into account
+    pub fn bbox(&self, include_stroke: bool) -> Rect {
+        self.geometry
+            .bbox(if include_stroke { self.stroke.as_ref() } else { None })
+    }
 }
 
 /// A fill rule for curve drawing.
@@ -437,12 +393,63 @@ impl Geometry {
         }
     }
 
-    /// The bounding box of the geometry.
-    pub fn bbox_size(&self) -> Size {
-        match self {
-            Self::Line(line) => Size::new(line.x, line.y),
-            Self::Rect(rect) => *rect,
-            Self::Curve(curve) => curve.bbox_size(),
+    /// Set the geometry's background fill and stroke.
+    pub fn filled_and_stroked(
+        self,
+        fill: impl Into<Paint>,
+        stroke: FixedStroke,
+    ) -> Shape {
+        Shape {
+            geometry: self,
+            fill: Some(fill.into()),
+            fill_rule: FillRule::default(),
+            stroke: Some(stroke),
         }
     }
+
+    /// The bounding box of the geometry,
+    /// optionally taking the stroke width of the shape into account
+    pub fn bbox(&self, stroke: Option<&FixedStroke>) -> Rect {
+        match self {
+            Self::Line(end) => {
+                if let Some(stroke) = stroke {
+                    bbox_of_stroked_line(end, stroke)
+                } else {
+                    Rect::new(end.min(Point::zero()), end.max(Point::zero()))
+                }
+            }
+            Self::Rect(size) => {
+                let min = size.to_point().min(Point::zero());
+                let stroke_width = stroke.map(|s| s.thickness).unwrap_or(Abs::zero());
+                Rect::from_pos_size(
+                    min.map(|i| i - 0.5 * stroke_width),
+                    size.map(|i| i.abs() + stroke_width),
+                )
+            }
+            Self::Curve(curve) => curve.bbox(stroke),
+        }
+    }
+}
+
+/// The bounding box of a line including the stroke
+fn bbox_of_stroked_line(end: &Point, stroke: &FixedStroke) -> Rect {
+    let cap = match stroke.cap {
+        super::LineCap::Butt => kurbo::Cap::Butt,
+        super::LineCap::Round => kurbo::Cap::Round,
+        super::LineCap::Square => kurbo::Cap::Square,
+    };
+    let style = kurbo::Stroke::new(stroke.thickness.to_raw()).with_caps(cap);
+    let opts = kurbo::StrokeOpts::default();
+    let tolerance = 0.01;
+    let bbox = kurbo::stroke(
+        [PathEl::LineTo(kurbo::Point::new(end.x.to_raw(), end.y.to_raw()))],
+        &style,
+        &opts,
+        tolerance,
+    )
+    .bounding_box();
+    Rect::new(
+        Point::new(Abs::raw(bbox.x0), Abs::raw(bbox.y0)),
+        Point::new(Abs::raw(bbox.x1), Abs::raw(bbox.y1)),
+    )
 }

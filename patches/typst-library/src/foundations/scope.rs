@@ -1,15 +1,15 @@
 use std::fmt::{self, Debug, Formatter};
 use std::hash::{Hash, Hasher};
 
-use ecow::{eco_format, EcoString};
-use indexmap::map::Entry;
+use ecow::{EcoString, eco_format};
 use indexmap::IndexMap;
+use indexmap::map::Entry;
+use rustc_hash::FxBuildHasher;
 use typst_syntax::Span;
 
-use crate::diag::{bail, DeprecationSink, HintedStrResult, HintedString, StrResult};
+use crate::diag::{HintedStrResult, HintedString, StrResult, WarningSink, bail};
 use crate::foundations::{
-    Element, Func, IntoValue, NativeElement, NativeFunc, NativeFuncData, NativeType,
-    Type, Value,
+    Func, IntoValue, NativeElement, NativeFunc, NativeFuncData, NativeType, Value,
 };
 use crate::{Category, Library};
 
@@ -103,7 +103,7 @@ impl<'a> Scopes<'a> {
 /// A map from binding names to values.
 #[derive(Default, Clone)]
 pub struct Scope {
-    map: IndexMap<EcoString, Binding>,
+    map: IndexMap<EcoString, Binding, FxBuildHasher>,
     deduplicate: bool,
     category: Option<Category>,
 }
@@ -149,15 +149,15 @@ impl Scope {
     /// Define a native type.
     #[track_caller]
     pub fn define_type<T: NativeType>(&mut self) -> &mut Binding {
-        let data = T::data();
-        self.define(data.name, Type::from(data))
+        let ty = T::ty();
+        self.define(ty.short_name(), ty)
     }
 
     /// Define a native element.
     #[track_caller]
     pub fn define_elem<T: NativeElement>(&mut self) -> &mut Binding {
-        let data = T::data();
-        self.define(data.name, Element::from(data))
+        let elem = T::ELEM;
+        self.define(elem.name(), elem)
     }
 
     /// Define a built-in with compile-time known name and returns a mutable
@@ -254,8 +254,8 @@ pub struct Binding {
     span: Span,
     /// The category of the binding.
     category: Option<Category>,
-    /// A deprecation message for the definition.
-    deprecation: Option<&'static str>,
+    /// The deprecation information if this item is deprecated.
+    deprecation: Option<Box<Deprecation>>,
 }
 
 /// The different kinds of slots.
@@ -285,8 +285,8 @@ impl Binding {
     }
 
     /// Marks this binding as deprecated, with the given `message`.
-    pub fn deprecated(&mut self, message: &'static str) -> &mut Self {
-        self.deprecation = Some(message);
+    pub fn deprecated(&mut self, deprecation: Deprecation) -> &mut Self {
+        self.deprecation = Some(Box::new(deprecation));
         self
     }
 
@@ -300,9 +300,9 @@ impl Binding {
     /// As the `sink`
     /// - pass `()` to ignore the message.
     /// - pass `(&mut engine, span)` to emit a warning into the engine.
-    pub fn read_checked(&self, mut sink: impl DeprecationSink) -> &Value {
-        if let Some(message) = self.deprecation {
-            sink.emit(message);
+    pub fn read_checked(&self, mut sink: impl WarningSink) -> &Value {
+        if let Some(message) = &self.deprecation {
+            sink.emit((**message).into());
         }
         &self.value
     }
@@ -319,7 +319,7 @@ impl Binding {
                 match capturer {
                     Capturer::Function => "function",
                     Capturer::Context => "context expression",
-                }
+                },
             ),
         }
     }
@@ -338,8 +338,8 @@ impl Binding {
     }
 
     /// A deprecation message for the value, if any.
-    pub fn deprecation(&self) -> Option<&'static str> {
-        self.deprecation
+    pub fn deprecation(&self) -> Option<&Deprecation> {
+        self.deprecation.as_deref()
     }
 
     /// The category of the value, if any.
@@ -357,17 +357,72 @@ pub enum Capturer {
     Context,
 }
 
+/// Information about a deprecated binding.
+#[derive(Debug, Copy, Clone, Eq, PartialEq, Hash)]
+pub struct Deprecation {
+    /// A deprecation message for the definition.
+    message: &'static str,
+    /// A version in which the deprecated binding is planned to be removed.
+    until: Option<&'static str>,
+}
+
+impl Deprecation {
+    /// Creates new deprecation info with a default message to display when
+    /// emitting the deprecation warning.
+    pub fn new() -> Self {
+        Self { message: "item is deprecated", until: None }
+    }
+
+    /// Set the message to display when emitting the deprecation warning.
+    pub fn with_message(mut self, message: &'static str) -> Self {
+        self.message = message;
+        self
+    }
+
+    /// Set the version in which the binding is planned to be removed.
+    pub fn with_until(mut self, version: &'static str) -> Self {
+        self.until = Some(version);
+        self
+    }
+
+    /// The message to display when emitting the deprecation warning.
+    pub fn message(&self) -> &'static str {
+        self.message
+    }
+
+    /// The version in which the binding is planned to be removed.
+    pub fn until(&self) -> Option<&'static str> {
+        self.until
+    }
+}
+
+impl Default for Deprecation {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl From<Deprecation> for HintedString {
+    fn from(deprecation: Deprecation) -> Self {
+        HintedString::new(deprecation.message.into()).with_hints(
+            deprecation
+                .until
+                .map(|v| eco_format!("it will be removed in Typst {v}")),
+        )
+    }
+}
+
 /// The error message when trying to mutate a variable from the standard
 /// library.
 #[cold]
 fn cannot_mutate_constant(var: &str) -> HintedString {
-    eco_format!("cannot mutate a constant: {}", var).into()
+    eco_format!("cannot mutate a constant: {var}").into()
 }
 
 /// The error message when a variable wasn't found.
 #[cold]
 fn unknown_variable(var: &str) -> HintedString {
-    let mut res = HintedString::new(eco_format!("unknown variable: {}", var));
+    let mut res = HintedString::new(eco_format!("unknown variable: {var}"));
 
     if var.contains('-') {
         res.hint(eco_format!(
@@ -384,7 +439,7 @@ fn unknown_variable(var: &str) -> HintedString {
 /// The error message when a variable wasn't found it math.
 #[cold]
 fn unknown_variable_math(var: &str, in_global: bool) -> HintedString {
-    let mut res = HintedString::new(eco_format!("unknown variable: {}", var));
+    let mut res = HintedString::new(eco_format!("unknown variable: {var}"));
 
     if matches!(var, "none" | "auto" | "false" | "true") {
         res.hint(eco_format!(
@@ -393,8 +448,13 @@ fn unknown_variable_math(var: &str, in_global: bool) -> HintedString {
         ));
     } else if in_global {
         res.hint(eco_format!(
-            "`{var}` is not available directly in math, \
-             try adding a hash before it: `#{var}`",
+            "`{var}` is not available directly in math, but is in the standard library",
+        ));
+        res.hint(eco_format!(
+            "to access `{var}` in code mode you can add a hash: `#{var}`",
+        ));
+        res.hint(eco_format!(
+            "or access `{var}` in math mode by using the `std` module: `std.{var}`",
         ));
     } else {
         res.hint(eco_format!(

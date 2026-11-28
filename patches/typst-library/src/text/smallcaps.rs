@@ -1,17 +1,14 @@
-use crate::diag::SourceResult;
-use crate::engine::Engine;
-use crate::foundations::{elem, Content, Packed, Show, StyleChain};
-use crate::text::TextElem;
+use crate::foundations::{Content, elem};
 
 /// Displays text in small capitals.
 ///
-/// # Example
+/// = Example <example>
 /// ```example
 /// Hello \
 /// #smallcaps[Hello]
 /// ```
 ///
-/// # Smallcaps fonts
+/// = Smallcaps fonts <smallcaps-fonts>
 /// By default, this uses the `smcp` and `c2sc` OpenType features on the font.
 /// Not all fonts support these features. Sometimes, smallcaps are part of a
 /// dedicated font. This is, for example, the case for the _Latin Modern_ family
@@ -25,8 +22,8 @@ use crate::text::TextElem;
 /// In the future, this function will support synthesizing smallcaps from normal
 /// letters, but this is not yet implemented.
 ///
-/// # Smallcaps headings
-/// You can use a [show rule]($styling/#show-rules) to apply smallcaps
+/// = Smallcaps headings <smallcaps-headings>
+/// You can use a @reference:styling:show-rules[show rule] to apply smallcaps
 /// formatting to all your headings. In the example below, we also center-align
 /// our headings and disable the standard bold font.
 ///
@@ -43,7 +40,7 @@ use crate::text::TextElem;
 /// = Introduction
 /// #lorem(40)
 /// ```
-#[elem(title = "Small Capitals", Show)]
+#[elem(title = "Small Capitals")]
 pub struct SmallcapsElem {
     /// Whether to turn uppercase letters into small capitals as well.
     ///
@@ -59,14 +56,6 @@ pub struct SmallcapsElem {
     /// The content to display in small capitals.
     #[required]
     pub body: Content,
-}
-
-impl Show for Packed<SmallcapsElem> {
-    #[typst_macros::time(name = "smallcaps", span = self.span())]
-    fn show(&self, _: &mut Engine, styles: StyleChain) -> SourceResult<Content> {
-        let sc = if self.all(styles) { Smallcaps::All } else { Smallcaps::Minuscules };
-        Ok(self.body.clone().styled(TextElem::set_smallcaps(Some(sc))))
-    }
 }
 
 /// What becomes small capitals.

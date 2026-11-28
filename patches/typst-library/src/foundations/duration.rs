@@ -1,10 +1,10 @@
 use std::fmt::{self, Debug, Formatter};
 use std::ops::{Add, Div, Mul, Neg, Sub};
 
-use ecow::{eco_format, EcoString};
+use ecow::{EcoString, eco_format};
 use time::ext::NumericalDuration;
 
-use crate::foundations::{func, repr, scope, ty, Repr};
+use crate::foundations::{Repr, func, repr, scope, ty};
 
 /// Represents a positive or negative span of time.
 #[ty(scope, cast)]
@@ -16,15 +16,30 @@ impl Duration {
     pub fn is_zero(&self) -> bool {
         self.0.is_zero()
     }
+
+    /// Decomposes the time into whole weeks, days, hours, minutes, and seconds.
+    pub fn decompose(&self) -> [i64; 5] {
+        let mut tmp = self.0;
+        let weeks = tmp.whole_weeks();
+        tmp -= weeks.weeks();
+        let days = tmp.whole_days();
+        tmp -= days.days();
+        let hours = tmp.whole_hours();
+        tmp -= hours.hours();
+        let minutes = tmp.whole_minutes();
+        tmp -= minutes.minutes();
+        let seconds = tmp.whole_seconds();
+        [weeks, days, hours, minutes, seconds]
+    }
 }
 
 #[scope]
 impl Duration {
     /// Creates a new duration.
     ///
-    /// You can specify the [duration] using weeks, days, hours, minutes and
-    /// seconds. You can also get a duration by subtracting two
-    /// [datetimes]($datetime).
+    /// You can specify the @duration[duration] using weeks, days, hours,
+    /// minutes and seconds. You can also get a duration by subtracting two
+    /// @datetime[datetimes].
     ///
     /// ```example
     /// #duration(
@@ -67,7 +82,8 @@ impl Duration {
     /// The duration expressed in seconds.
     ///
     /// This function returns the total duration represented in seconds as a
-    /// floating-point number rather than the second component of the duration.
+    /// floating-point number, rather than the seconds component of the
+    /// duration.
     #[func]
     pub fn seconds(&self) -> f64 {
         self.0.as_seconds_f64()
@@ -76,7 +92,8 @@ impl Duration {
     /// The duration expressed in minutes.
     ///
     /// This function returns the total duration represented in minutes as a
-    /// floating-point number rather than the second component of the duration.
+    /// floating-point number, rather than the minutes component of the
+    /// duration.
     #[func]
     pub fn minutes(&self) -> f64 {
         self.seconds() / 60.0
@@ -85,7 +102,7 @@ impl Duration {
     /// The duration expressed in hours.
     ///
     /// This function returns the total duration represented in hours as a
-    /// floating-point number rather than the second component of the duration.
+    /// floating-point number, rather than the hours component of the duration.
     #[func]
     pub fn hours(&self) -> f64 {
         self.seconds() / 3_600.0
@@ -94,7 +111,7 @@ impl Duration {
     /// The duration expressed in days.
     ///
     /// This function returns the total duration represented in days as a
-    /// floating-point number rather than the second component of the duration.
+    /// floating-point number, rather than the days component of the duration.
     #[func]
     pub fn days(&self) -> f64 {
         self.seconds() / 86_400.0
@@ -103,7 +120,7 @@ impl Duration {
     /// The duration expressed in weeks.
     ///
     /// This function returns the total duration represented in weeks as a
-    /// floating-point number rather than the second component of the duration.
+    /// floating-point number, rather than the weeks component of the duration.
     #[func]
     pub fn weeks(&self) -> f64 {
         self.seconds() / 604_800.0
@@ -118,34 +135,25 @@ impl Debug for Duration {
 
 impl Repr for Duration {
     fn repr(&self) -> EcoString {
-        let mut tmp = self.0;
+        let [weeks, days, hours, minutes, seconds] = self.decompose();
         let mut vec = Vec::with_capacity(5);
 
-        let weeks = tmp.whole_seconds() / 604_800.0 as i64;
         if weeks != 0 {
             vec.push(eco_format!("weeks: {}", weeks.repr()));
         }
-        tmp -= weeks.weeks();
 
-        let days = tmp.whole_days();
         if days != 0 {
             vec.push(eco_format!("days: {}", days.repr()));
         }
-        tmp -= days.days();
 
-        let hours = tmp.whole_hours();
         if hours != 0 {
             vec.push(eco_format!("hours: {}", hours.repr()));
         }
-        tmp -= hours.hours();
 
-        let minutes = tmp.whole_minutes();
         if minutes != 0 {
             vec.push(eco_format!("minutes: {}", minutes.repr()));
         }
-        tmp -= minutes.minutes();
 
-        let seconds = tmp.whole_seconds();
         if seconds != 0 {
             vec.push(eco_format!("seconds: {}", seconds.repr()));
         }

@@ -1,22 +1,16 @@
 use ecow::eco_format;
 use typst_syntax::Spanned;
 
-use crate::diag::{At, SourceResult};
+use crate::diag::{At, LineCol, LoadError, LoadedWithin, SourceResult, bail};
 use crate::engine::Engine;
-use crate::foundations::{func, scope, Str, Value};
-use crate::loading::{DataSource, Load, Readable};
+use crate::foundations::{Str, Value, func, scope};
+use crate::loading::{DataSource, Load};
 
 /// Reads structured data from a JSON file.
 ///
-/// The file must contain a valid JSON value, such as object or array. JSON
-/// objects will be converted into Typst dictionaries, and JSON arrays will be
-/// converted into Typst arrays. Strings and booleans will be converted into the
-/// Typst equivalents, `null` will be converted into `{none}`, and numbers will
-/// be converted to floats or integers depending on whether they are whole
-/// numbers.
-///
-/// Be aware that integers larger than 2<sup>63</sup>-1 will be converted to
-/// floating point numbers, which may result in an approximative value.
+/// The file must contain a valid JSON value, such as object or array. The JSON
+/// values will be converted into corresponding Typst values as listed in the
+/// @json:conversion[table below].
 ///
 /// The function returns a dictionary, an array or, depending on the JSON file,
 /// another JSON data type.
@@ -24,7 +18,7 @@ use crate::loading::{DataSource, Load, Readable};
 /// The JSON files in the example contain objects with the keys `temperature`,
 /// `unit`, and `weather`.
 ///
-/// # Example
+/// = Example <example>
 /// ```example
 /// #let forecast(day) = block[
 ///   #box(square(
@@ -48,31 +42,93 @@ use crate::loading::{DataSource, Load, Readable};
 /// #forecast(json("monday.json"))
 /// #forecast(json("tuesday.json"))
 /// ```
+///
+/// = #short-or-long[Conversion][Conversion details] <conversion>
+/// #docs-table(
+///   table.header[JSON value][Converted into Typst],
+///
+///   [`null`],
+///   [`{none}`],
+///
+///   [bool],
+///   [@bool],
+///
+///   [number],
+///   [@float or @int],
+///
+///   [string],
+///   [@str],
+///
+///   [array],
+///   [@array],
+///
+///   [object],
+///   [@dictionary],
+/// )
+///
+/// #docs-table(
+///   table.header[Typst value][Converted into JSON],
+///
+///   [types that can be converted from JSON],
+///   [corresponding JSON value],
+///
+///   [@bytes],
+///   [string via @repr],
+///
+///   [@symbol],
+///   [string],
+///
+///   [@content],
+///   [an object describing the content],
+///
+///   [other types (@length, etc.)],
+///   [string via @repr],
+/// )
+///
+/// == Notes <notes>
+/// - In most cases, JSON numbers will be converted to floats or integers
+///   depending on whether they are whole numbers. However, be aware that
+///   integers larger than 2#super[63]-1 or smaller than -2#super[63] will be
+///   converted to floating-point numbers, which may result in an approximative
+///   value.
+///
+/// - Bytes are not encoded as JSON arrays for performance and readability
+///   reasons. Consider using @cbor.encode for binary data.
+///
+/// - The `repr` function is @repr:debugging-only[for debugging purposes only],
+///   and its output is not guaranteed to be stable across Typst versions.
 #[func(scope, title = "JSON")]
 pub fn json(
     engine: &mut Engine,
-    /// A [path]($syntax/#paths) to a JSON file or raw JSON bytes.
+    /// A path to a JSON file or raw JSON bytes.
     source: Spanned<DataSource>,
 ) -> SourceResult<Value> {
-    let data = source.load(engine.world)?;
-    serde_json::from_slice(data.as_slice())
-        .map_err(|err| eco_format!("failed to parse JSON ({err})"))
-        .at(source.span)
+    let loaded = source.load(engine.world)?;
+    let raw = loaded.data.as_slice();
+    // If the file starts with a UTF-8 Byte Order Mark (BOM), return a
+    // friendly error message.
+    if raw.starts_with(b"\xef\xbb\xbf") {
+        bail!(
+            LoadError::text(
+                LineCol::one_based(1, 1),
+                "failed to parse JSON",
+                "unexpected Byte Order Mark",
+            )
+            .within(&loaded)
+            .with_hint("JSON requires UTF-8 without a BOM")
+        );
+    }
+
+    serde_json::from_slice(raw)
+        .map_err(|err| {
+            let pos = LineCol::one_based(err.line(), err.column());
+            LoadError::text(pos, "failed to parse JSON", err)
+        })
+        .within(&loaded)
 }
 
 #[scope]
 impl json {
-    /// Reads structured data from a JSON string/bytes.
-    #[func(title = "Decode JSON")]
-    #[deprecated = "`json.decode` is deprecated, directly pass bytes to `json` instead"]
-    pub fn decode(
-        engine: &mut Engine,
-        /// JSON data.
-        data: Spanned<Readable>,
-    ) -> SourceResult<Value> {
-        json(engine, data.map(Readable::into_source))
-    }
-
     /// Encodes structured data into a JSON string.
     #[func(title = "Encode JSON")]
     pub fn encode(

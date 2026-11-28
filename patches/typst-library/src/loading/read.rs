@@ -1,23 +1,21 @@
-use ecow::EcoString;
 use typst_syntax::Spanned;
 
-use crate::diag::{At, FileError, SourceResult};
+use crate::diag::{LoadedWithin, SourceResult};
 use crate::engine::Engine;
-use crate::foundations::{func, Cast};
-use crate::loading::Readable;
-use crate::World;
+use crate::foundations::{Cast, PathOrStr, func};
+use crate::loading::{DataSource, Load, Readable};
 
 /// Reads plain text or data from a file.
 ///
-/// By default, the file will be read as UTF-8 and returned as a [string]($str).
+/// By default, the file will be read as UTF-8 and returned as a @str[string].
 ///
-/// If you specify `{encoding: none}`, this returns raw [bytes] instead.
+/// If you specify `{encoding: none}`, this returns raw @bytes[bytes] instead.
 ///
-/// # Example
+/// = Example <example>
 /// ```example
 /// An example for a HTML file: \
 /// #let text = read("example.html")
-/// #raw(text, lang: "html")
+/// #raw(text, block: true, lang: "html")
 ///
 /// Raw bytes:
 /// #read("tiger.jpg", encoding: none)
@@ -26,9 +24,7 @@ use crate::World;
 pub fn read(
     engine: &mut Engine,
     /// Path to a file.
-    ///
-    /// For more details, see the [Paths section]($syntax/#paths).
-    path: Spanned<EcoString>,
+    path: Spanned<PathOrStr>,
     /// The encoding to read the file with.
     ///
     /// If set to `{none}`, this function returns raw bytes.
@@ -36,14 +32,10 @@ pub fn read(
     #[default(Some(Encoding::Utf8))]
     encoding: Option<Encoding>,
 ) -> SourceResult<Readable> {
-    let Spanned { v: path, span } = path;
-    let id = span.resolve_path(&path).at(span)?;
-    let data = engine.world.file(id).at(span)?;
+    let loaded = path.map(DataSource::Path).load(engine.world)?;
     Ok(match encoding {
-        None => Readable::Bytes(data),
-        Some(Encoding::Utf8) => {
-            Readable::Str(data.to_str().map_err(FileError::from).at(span)?)
-        }
+        None => Readable::Bytes(loaded.data),
+        Some(Encoding::Utf8) => Readable::Str(loaded.data.to_str().within(&loaded)?),
     })
 }
 

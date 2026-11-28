@@ -2,31 +2,33 @@ use std::fmt::{self, Debug, Formatter};
 use std::hash::{Hash, Hasher};
 use std::sync::{Arc, Mutex};
 
-use ecow::{eco_format, EcoString};
+use ecow::{EcoString, eco_format};
 use typst_syntax::Spanned;
 use wasmi::Memory;
 
-use crate::diag::{bail, At, SourceResult, StrResult};
+use crate::diag::{At, SourceResult, StrResult, bail};
 use crate::engine::Engine;
-use crate::foundations::{cast, func, scope, Binding, Bytes, Func, Module, Scope, Value};
+use crate::foundations::{Binding, Bytes, Func, Module, Scope, Value, cast, func, scope};
 use crate::loading::{DataSource, Load};
 
 /// Loads a WebAssembly module.
 ///
-/// The resulting [module] will contain one Typst [function] for each function
-/// export of the loaded WebAssembly module.
+/// The resulting @module[module] will contain one Typst @function[function] for
+/// each function export of the loaded WebAssembly module.
 ///
 /// Typst WebAssembly plugins need to follow a specific
-/// [protocol]($plugin/#protocol). To run as a plugin, a program needs to be
+/// @plugin:protocol[protocol]. To run as a plugin, a program needs to be
 /// compiled to a 32-bit shared WebAssembly library. Plugin functions may accept
-/// multiple [byte buffers]($bytes) as arguments and return a single byte
-/// buffer. They should typically be wrapped in idiomatic Typst functions that
-/// perform the necessary conversions between native Typst types and bytes.
+/// multiple @bytes[byte buffers] as arguments and return a single byte buffer.
+/// They should typically be wrapped in idiomatic Typst functions that perform
+/// the necessary conversions between native Typst types and bytes by leveraging
+/// @str.constructor[`str`], @bytes.constructor[`bytes`], and
+/// @reference:data-loading[data loading functions].
 ///
 /// For security reasons, plugins run in isolation from your system. This means
 /// that printing, reading files, or similar things are not supported.
 ///
-/// # Example
+/// = Example <example>
 /// ```example
 /// #let myplugin = plugin("hello.wasm")
 /// #let concat(a, b) = str(
@@ -41,12 +43,13 @@ use crate::loading::{DataSource, Load};
 ///
 /// Since the plugin function returns a module, it can be used with import
 /// syntax:
+///
 /// ```typ
 /// #import plugin("hello.wasm"): concatenate
 /// ```
 ///
-/// # Purity
-/// Plugin functions **must be pure:** A plugin function call most not have any
+/// = Purity <purity>
+/// Plugin functions *must be pure:* A plugin function call must not have any
 /// observable side effects on future plugin calls and given the same arguments,
 /// it must always return the same value.
 ///
@@ -65,29 +68,29 @@ use crate::loading::{DataSource, Load};
 /// That said, mutable operations _can be_ useful for plugins that require
 /// costly runtime initialization. Due to the purity requirement, such
 /// initialization cannot be performed through a normal function call. Instead,
-/// Typst exposes a [plugin transition API]($plugin.transition), which executes
-/// a function call and then creates a derived module with new functions which
+/// Typst exposes a @plugin.transition[plugin transition API], which executes a
+/// function call and then creates a derived module with new functions which
 /// will observe the side effects produced by the transition call. The original
 /// plugin remains unaffected.
 ///
-/// # Plugins and Packages
+/// = Plugins and Packages <plugins-and-packages>
 /// Any Typst code can make use of a plugin simply by including a WebAssembly
 /// file and loading it. However, because the byte-based plugin interface is
 /// quite low-level, plugins are typically exposed through a package containing
 /// the plugin and idiomatic wrapper functions.
 ///
-/// # WASI
-/// Many compilers will use the [WASI ABI](https://wasi.dev/) by default or as
-/// their only option (e.g. emscripten), which allows printing, reading files,
-/// etc. This ABI will not directly work with Typst. You will either need to
-/// compile to a different target or [stub all
-/// functions](https://github.com/astrale-sharp/wasm-minimal-protocol/tree/master/crates/wasi-stub).
+/// = WASI <wasi>
+/// Many compilers will use the #link("https://wasi.dev/")[WASI ABI] by default
+/// or as their only option (e.g. emscripten), which allows printing, reading
+/// files, etc. This ABI will not directly work with Typst. You will either need
+/// to compile to a different target or
+/// #link("https://github.com/typst-community/wasm-minimal-protocol/tree/main/crates/wasi-stub")[stub all functions].
 ///
-/// # Protocol
+/// = Protocol <protocol>
 /// To be used as a plugin, a WebAssembly module must conform to the following
 /// protocol:
 ///
-/// ## Exports
+/// == Exports <exports>
 /// A plugin module can export functions to make them callable from Typst. To
 /// conform to the protocol, an exported function should:
 ///
@@ -95,8 +98,8 @@ use crate::loading::{DataSource, Load};
 ///   lengths, so `usize/size_t` may be preferable), and return one 32-bit
 ///   integer.
 ///
-/// - The function should first allocate a buffer `buf` of length `a_1 + a_2 +
-///   ... + a_n`, and then call
+/// - The function should first allocate a buffer `buf` of length
+///   `a_1 + a_2 + ... + a_n`, and then call
 ///   `wasm_minimal_protocol_write_args_to_buffer(buf.ptr)`.
 ///
 /// - The `a_1` first bytes of the buffer now constitute the first argument, the
@@ -112,22 +115,20 @@ use crate::loading::{DataSource, Load};
 /// - To signal an error, the function should return `1`. The written buffer is
 ///   then interpreted as an UTF-8 encoded error message.
 ///
-/// ## Imports
+/// == Imports <imports>
 /// Plugin modules need to import two functions that are provided by the
 /// runtime. (Types and functions are described using WAT syntax.)
 ///
-/// - `(import "typst_env" "wasm_minimal_protocol_write_args_to_buffer" (func
-///   (param i32)))`
+/// - `(import "typst_env" "wasm_minimal_protocol_write_args_to_buffer" (func (param i32)))`
 ///
 ///   Writes the arguments for the current function into a plugin-allocated
-///   buffer. When a plugin function is called, it [receives the
-///   lengths](#exports) of its input buffers as arguments. It should then
-///   allocate a buffer whose capacity is at least the sum of these lengths. It
-///   should then call this function with a `ptr` to the buffer to fill it with
-///   the arguments, one after another.
+///   buffer. When a plugin function is called, it
+///   @plugin:exports[receives the lengths] of its input buffers as arguments.
+///   It should then allocate a buffer whose capacity is at least the sum of
+///   these lengths. It should then call this function with a `ptr` to the
+///   buffer to fill it with the arguments, one after another.
 ///
-/// - `(import "typst_env" "wasm_minimal_protocol_send_result_to_host" (func
-///   (param i32 i32)))`
+/// - `(import "typst_env" "wasm_minimal_protocol_send_result_to_host" (func (param i32 i32)))`
 ///
 ///   Sends the output of the current function to the host (Typst). The first
 ///   parameter shall be a pointer to a buffer (`ptr`), while the second is the
@@ -135,24 +136,23 @@ use crate::loading::{DataSource, Load};
 ///   immediately after this function returns. If the message should be
 ///   interpreted as an error message, it should be encoded as UTF-8.
 ///
-/// # Resources
-/// For more resources, check out the [wasm-minimal-protocol
-/// repository](https://github.com/astrale-sharp/wasm-minimal-protocol). It
-/// contains:
+/// = Resources <resources>
+/// For more resources, check out the
+/// #link("https://github.com/typst-community/wasm-minimal-protocol")[wasm-minimal-protocol repository].
+/// It contains:
 ///
 /// - A list of example plugin implementations and a test runner for these
 ///   examples
-/// - Wrappers to help you write your plugin in Rust (Zig wrapper in
-///   development)
+/// - Wrappers to help you write your plugin in Rust
 /// - A stubber for WASI
 #[func(scope)]
 pub fn plugin(
     engine: &mut Engine,
-    /// A [path]($syntax/#paths) to a WebAssembly file or raw WebAssembly bytes.
+    /// A path to a WebAssembly file or raw WebAssembly bytes.
     source: Spanned<DataSource>,
 ) -> SourceResult<Module> {
-    let data = source.load(engine.world)?;
-    Plugin::module(data).at(source.span)
+    let loaded = source.load(engine.world)?;
+    Plugin::module(loaded.data).at(source.span)
 }
 
 #[scope]
@@ -163,8 +163,8 @@ impl plugin {
     ///
     /// Note that calling an impure function through a normal function call
     /// (without use of the transition API) is forbidden and leads to
-    /// unpredictable behaviour. Read the [section on purity]($plugin/#purity)
-    /// for more details.
+    /// unpredictable behaviour. Read the @plugin:purity[section on purity] for
+    /// more details.
     ///
     /// In the example below, we load the plugin `hello-mut.wasm` which exports
     /// two functions: The `get()` function retrieves a global array as a
@@ -212,7 +212,7 @@ pub struct PluginFunc {
 
 impl PluginFunc {
     /// The name of the plugin function.
-    pub fn name(&self) -> &str {
+    pub fn name(&self) -> &EcoString {
         &self.name
     }
 
@@ -266,7 +266,12 @@ impl Plugin {
 
     /// Create a new plugin from raw WebAssembly bytes.
     fn new(bytes: Bytes) -> StrResult<Self> {
-        let engine = wasmi::Engine::default();
+        let mut config = wasmi::Config::default();
+
+        // Disable relaxed SIMD as it can introduce non-determinism.
+        config.wasm_relaxed_simd(false);
+
+        let engine = wasmi::Engine::new(&config);
         let module = wasmi::Module::new(&engine, bytes.as_slice())
             .map_err(|err| format!("failed to load WebAssembly module ({err})"))?;
 
@@ -302,7 +307,7 @@ impl Plugin {
         })
     }
 
-    /// Execute a function with access to an instsance.
+    /// Execute a function with access to an instance.
     fn call(&self, func: &str, args: Vec<Bytes>) -> StrResult<Bytes> {
         // Acquire an instance from the pool (potentially creating a new one).
         let mut instance = self.acquire()?;
@@ -415,7 +420,7 @@ struct PluginInstance {
 /// A snapshot of a plugin instance.
 struct Snapshot {
     /// The number of pages in the main memory.
-    mem_pages: u32,
+    mem_pages: u64,
     /// The data in the main memory.
     mem_data: Vec<u8>,
 }
@@ -428,8 +433,7 @@ impl PluginInstance {
         let mut store = wasmi::Store::new(base.linker.engine(), CallData::default());
         let instance = base
             .linker
-            .instantiate(&mut store, &base.module)
-            .and_then(|pre_instance| pre_instance.start(&mut store))
+            .instantiate_and_start(&mut store, &base.module)
             .map_err(|e| eco_format!("{e}"))?;
 
         let mut instance = PluginInstance { instance, store };
@@ -452,12 +456,12 @@ impl PluginInstance {
         // Check function signature. Do this lazily only when a function is called
         // because there might be exported functions like `_initialize` that don't
         // match the schema.
-        if ty.params().iter().any(|&v| v != wasmi::core::ValType::I32) {
+        if ty.params().iter().any(|&v| v != wasmi::ValType::I32) {
             bail!(
-                "plugin function `{func}` has a parameter that is not a 32-bit integer"
+                "plugin function `{func}` has a parameter that is not a 32-bit integer",
             );
         }
-        if ty.results() != [wasmi::core::ValType::I32] {
+        if ty.results() != [wasmi::ValType::I32] {
             bail!("plugin function `{func}` does not return exactly one 32-bit integer");
         }
 
@@ -557,7 +561,7 @@ struct CallData {
     args: Vec<Bytes>,
     /// The results of the current call.
     output: Vec<u8>,
-    /// A memory error that occured during execution of the current call.
+    /// A memory error that occurred during execution of the current call.
     memory_error: Option<MemoryError>,
 }
 

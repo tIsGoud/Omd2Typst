@@ -1,11 +1,5 @@
-use crate::diag::SourceResult;
-use crate::engine::Engine;
-use crate::foundations::{
-    cast, elem, Content, NativeElement, Packed, Show, Smart, StyleChain,
-};
-use crate::layout::{
-    Abs, Alignment, Angle, BlockElem, HAlignment, Length, Ratio, Rel, VAlignment,
-};
+use crate::foundations::{Content, Smart, cast, elem};
+use crate::layout::{Abs, Alignment, Angle, HAlignment, Length, Ratio, Rel, VAlignment};
 
 /// Moves content without affecting layout.
 ///
@@ -13,10 +7,10 @@ use crate::layout::{
 /// it at the original positions. Containers will still be sized as if the
 /// content was not moved.
 ///
-/// # Example
+/// = Example <example>
 /// ```example
-/// #rect(inset: 0pt, move(
-///   dx: 6pt, dy: 6pt,
+/// #rect(inset: 0pt, fill: gray, move(
+///   dx: 4pt, dy: 6pt,
 ///   rect(
 ///     inset: 8pt,
 ///     fill: white,
@@ -25,7 +19,13 @@ use crate::layout::{
 ///   )
 /// ))
 /// ```
-#[elem(Show)]
+///
+/// = Accessibility <accessibility>
+/// Moving is transparent to Assistive Technology (AT). Your content will be
+/// read in the order it appears in the source, regardless of any visual
+/// movement. If you need to hide content from AT altogether in PDF export,
+/// consider using @pdf.artifact.
+#[elem]
 pub struct MoveElem {
     /// The horizontal displacement of the content.
     pub dx: Rel<Length>,
@@ -38,20 +38,12 @@ pub struct MoveElem {
     pub body: Content,
 }
 
-impl Show for Packed<MoveElem> {
-    fn show(&self, engine: &mut Engine, _: StyleChain) -> SourceResult<Content> {
-        Ok(BlockElem::single_layouter(self.clone(), engine.routines.layout_move)
-            .pack()
-            .spanned(self.span()))
-    }
-}
-
 /// Rotates content without affecting layout.
 ///
 /// Rotates an element by a given angle. The layout will act as if the element
 /// was not rotated unless you specify `{reflow: true}`.
 ///
-/// # Example
+/// = Example <example>
 /// ```example
 /// #stack(
 ///   dir: ltr,
@@ -60,22 +52,21 @@ impl Show for Packed<MoveElem> {
 ///     .map(i => rotate(24deg * i)[X]),
 /// )
 /// ```
-#[elem(Show)]
+#[elem]
 pub struct RotateElem {
     /// The amount of rotation.
     ///
     /// ```example
     /// #rotate(-1.571rad)[Space!]
     /// ```
-    ///
     #[positional]
     pub angle: Angle,
 
     /// The origin of the rotation.
     ///
     /// If, for instance, you wanted the bottom left corner of the rotated
-    /// element to stay aligned with the baseline, you would set it to `bottom +
-    /// left` instead.
+    /// element to stay aligned with the baseline, you would set it to
+    /// `bottom + left` instead.
     ///
     /// ```example
     /// #set text(spacing: 8pt)
@@ -107,25 +98,17 @@ pub struct RotateElem {
     pub body: Content,
 }
 
-impl Show for Packed<RotateElem> {
-    fn show(&self, engine: &mut Engine, _: StyleChain) -> SourceResult<Content> {
-        Ok(BlockElem::single_layouter(self.clone(), engine.routines.layout_rotate)
-            .pack()
-            .spanned(self.span()))
-    }
-}
-
 /// Scales content without affecting layout.
 ///
 /// Lets you mirror content by specifying a negative scale on a single axis.
 ///
-/// # Example
+/// = Example <example>
 /// ```example
 /// #set align(center)
 /// #scale(x: -100%)[This is mirrored.]
 /// #scale(x: -100%, reflow: true)[This is mirrored.]
 /// ```
-#[elem(Show)]
+#[elem]
 pub struct ScaleElem {
     /// The scaling factor for both axes, as a positional argument. This is just
     /// an optional shorthand notation for setting `x` and `y` to the same
@@ -164,9 +147,9 @@ pub struct ScaleElem {
 
     /// Whether the scaling impacts the layout.
     ///
-    /// If set to `{false}`, the scaled content will be allowed to overlap
-    /// other content. If set to `{true}`, it will compute the new size of
-    /// the scaled content and adjust the layout accordingly.
+    /// If set to `{false}`, the scaled content will be allowed to overlap other
+    /// content. If set to `{true}`, it will compute the new size of the scaled
+    /// content and adjust the layout accordingly.
     ///
     /// ```example
     /// Hello #scale(x: 20%, y: 40%, reflow: true)[World]!
@@ -177,14 +160,6 @@ pub struct ScaleElem {
     /// The content to scale.
     #[required]
     pub body: Content,
-}
-
-impl Show for Packed<ScaleElem> {
-    fn show(&self, engine: &mut Engine, _: StyleChain) -> SourceResult<Content> {
-        Ok(BlockElem::single_layouter(self.clone(), engine.routines.layout_scale)
-            .pack()
-            .spanned(self.span()))
-    }
 }
 
 /// To what size something shall be scaled.
@@ -209,20 +184,19 @@ cast! {
 /// Skews an element in horizontal and/or vertical direction. The layout will
 /// act as if the element was not skewed unless you specify `{reflow: true}`.
 ///
-/// # Example
+/// = Example <example>
 /// ```example
 /// #skew(ax: -12deg)[
 ///   This is some fake italic text.
 /// ]
 /// ```
-#[elem(Show)]
+#[elem]
 pub struct SkewElem {
     /// The horizontal skewing angle.
     ///
     /// ```example
     /// #skew(ax: 30deg)[Skewed]
     /// ```
-    ///
     #[default(Angle::zero())]
     pub ax: Angle,
 
@@ -231,7 +205,6 @@ pub struct SkewElem {
     /// ```example
     /// #skew(ay: 30deg)[Skewed]
     /// ```
-    ///
     #[default(Angle::zero())]
     pub ay: Angle,
 
@@ -252,7 +225,8 @@ pub struct SkewElem {
     ///
     /// If set to `{false}`, the skewed content will retain the bounding box of
     /// the original content. If set to `{true}`, the bounding box will take the
-    /// transformation of the content into account and adjust the layout accordingly.
+    /// transformation of the content into account and adjust the layout
+    /// accordingly.
     ///
     /// ```example
     /// Hello #skew(ay: 30deg, reflow: true, "World")!
@@ -263,14 +237,6 @@ pub struct SkewElem {
     /// The content to skew.
     #[required]
     pub body: Content,
-}
-
-impl Show for Packed<SkewElem> {
-    fn show(&self, engine: &mut Engine, _: StyleChain) -> SourceResult<Content> {
-        Ok(BlockElem::single_layouter(self.clone(), engine.routines.layout_skew)
-            .pack()
-            .spanned(self.span()))
-    }
 }
 
 /// A scale-skew-translate transformation.
@@ -307,6 +273,20 @@ impl Transform {
         Self { sx, sy, ..Self::identity() }
     }
 
+    /// A scale transform at a specific position.
+    pub fn scale_at(sx: Ratio, sy: Ratio, px: Abs, py: Abs) -> Self {
+        Self::translate(px, py)
+            .pre_concat(Self::scale(sx, sy))
+            .pre_concat(Self::translate(-px, -py))
+    }
+
+    /// A rotate transform at a specific position.
+    pub fn rotate_at(angle: Angle, px: Abs, py: Abs) -> Self {
+        Self::translate(px, py)
+            .pre_concat(Self::rotate(angle))
+            .pre_concat(Self::translate(-px, -py))
+    }
+
     /// A rotate transform.
     pub fn rotate(angle: Angle) -> Self {
         let cos = Ratio::new(angle.cos());
@@ -332,6 +312,22 @@ impl Transform {
     /// Whether this is the identity transformation.
     pub fn is_identity(self) -> bool {
         self == Self::identity()
+    }
+
+    /// Whether this transformation only scales along the X and Y axis.
+    pub fn is_only_scale(self) -> bool {
+        self.ky == Ratio::zero()
+            && self.kx == Ratio::zero()
+            && self.tx == Abs::zero()
+            && self.ty == Abs::zero()
+    }
+
+    /// Whether this transformation only translates along the X and Y axis.
+    pub fn is_only_translate(self) -> bool {
+        self.sx == Ratio::one()
+            && self.sy == Ratio::one()
+            && self.ky == Ratio::zero()
+            && self.kx == Ratio::zero()
     }
 
     /// Pre-concatenate another transformation.

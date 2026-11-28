@@ -1,10 +1,10 @@
-use ecow::{eco_format, EcoString};
+use az::SaturatingAs;
 use typst_syntax::Spanned;
 
-use crate::diag::{bail, At, SourceResult};
+use crate::diag::{LineCol, LoadError, LoadedWithin, ReportTextPos, SourceResult, bail};
 use crate::engine::Engine;
-use crate::foundations::{cast, func, scope, Array, Dict, IntoValue, Type, Value};
-use crate::loading::{DataSource, Load, Readable};
+use crate::foundations::{Array, Dict, IntoValue, Type, Value, cast, func};
+use crate::loading::{DataSource, Load};
 
 /// Reads structured data from a CSV file.
 ///
@@ -13,7 +13,7 @@ use crate::loading::{DataSource, Load, Readable};
 /// rows will be collected into a single array. Header rows will not be
 /// stripped.
 ///
-/// # Example
+/// = Example <example>
 /// ```example
 /// #let results = csv("example.csv")
 ///
@@ -23,13 +23,13 @@ use crate::loading::{DataSource, Load, Readable};
 ///   ..results.flatten(),
 /// )
 /// ```
-#[func(scope, title = "CSV")]
+#[func(title = "CSV")]
 pub fn csv(
     engine: &mut Engine,
-    /// A [path]($syntax/#paths) to a CSV file or raw CSV bytes.
+    /// A path to a CSV file or raw CSV bytes.
     source: Spanned<DataSource>,
-    /// The delimiter that separates columns in the CSV file.
-    /// Must be a single ASCII character.
+    /// The delimiter that separates columns in the CSV file. Must be a single
+    /// ASCII character.
     #[named]
     #[default]
     delimiter: Delimiter,
@@ -44,7 +44,7 @@ pub fn csv(
     #[default(RowType::Array)]
     row_type: RowType,
 ) -> SourceResult<Array> {
-    let data = source.load(engine.world)?;
+    let loaded = source.load(engine.world)?;
 
     let mut builder = ::csv::ReaderBuilder::new();
     let has_headers = row_type == RowType::Dict;
@@ -53,7 +53,7 @@ pub fn csv(
 
     // Counting lines from 1 by default.
     let mut line_offset: usize = 1;
-    let mut reader = builder.from_reader(data.as_slice());
+    let mut reader = builder.from_reader(loaded.data.as_slice());
     let mut headers: Option<::csv::StringRecord> = None;
 
     if has_headers {
@@ -62,9 +62,9 @@ pub fn csv(
         headers = Some(
             reader
                 .headers()
+                .cloned()
                 .map_err(|err| format_csv_error(err, 1))
-                .at(source.span)?
-                .clone(),
+                .within(&loaded)?,
         );
     }
 
@@ -74,7 +74,7 @@ pub fn csv(
         // incorrect with `has_headers` set to `false`. See issue:
         // https://github.com/BurntSushi/rust-csv/issues/184
         let line = line + line_offset;
-        let row = result.map_err(|err| format_csv_error(err, line)).at(source.span)?;
+        let row = result.map_err(|err| format_csv_error(err, line)).within(&loaded)?;
         let item = if let Some(headers) = &headers {
             let mut dict = Dict::new();
             for (field, value) in headers.iter().zip(&row) {
@@ -89,35 +89,6 @@ pub fn csv(
     }
 
     Ok(array)
-}
-
-#[scope]
-impl csv {
-    /// Reads structured data from a CSV string/bytes.
-    #[func(title = "Decode CSV")]
-    #[deprecated = "`csv.decode` is deprecated, directly pass bytes to `csv` instead"]
-    pub fn decode(
-        engine: &mut Engine,
-        /// CSV data.
-        data: Spanned<Readable>,
-        /// The delimiter that separates columns in the CSV file.
-        /// Must be a single ASCII character.
-        #[named]
-        #[default]
-        delimiter: Delimiter,
-        /// How to represent the file's rows.
-        ///
-        /// - If set to `array`, each row is represented as a plain array of
-        ///   strings.
-        /// - If set to `dictionary`, each row is represented as a dictionary
-        ///   mapping from header keys to strings. This option only makes sense
-        ///   when a header row is present in the CSV file.
-        #[named]
-        #[default(RowType::Array)]
-        row_type: RowType,
-    ) -> SourceResult<Array> {
-        csv(engine, data.map(Readable::into_source), delimiter, row_type)
-    }
 }
 
 /// The delimiter to use when parsing CSV files.
@@ -164,15 +135,23 @@ cast! {
 }
 
 /// Format the user-facing CSV error message.
-fn format_csv_error(err: ::csv::Error, line: usize) -> EcoString {
+fn format_csv_error(err: ::csv::Error, line: usize) -> LoadError {
+    let msg = "failed to parse CSV";
+    let pos = (err.kind().position())
+        .map(|pos| {
+            let start = pos.byte().saturating_as();
+            ReportTextPos::from(start..start)
+        })
+        .unwrap_or(LineCol::one_based(line, 1).into());
     match err.kind() {
-        ::csv::ErrorKind::Utf8 { .. } => "file is not valid utf-8".into(),
-        ::csv::ErrorKind::UnequalLengths { expected_len, len, .. } => {
-            eco_format!(
-                "failed to parse CSV (found {len} instead of \
-                 {expected_len} fields in line {line})"
-            )
+        ::csv::ErrorKind::Utf8 { .. } => {
+            LoadError::text(pos, msg, "file is not valid UTF-8")
         }
-        _ => eco_format!("failed to parse CSV ({err})"),
+        ::csv::ErrorKind::UnequalLengths { expected_len, len, .. } => {
+            let err =
+                format!("found {len} instead of {expected_len} fields in line {line}");
+            LoadError::text(pos, msg, err)
+        }
+        _ => LoadError::text(pos, "failed to parse CSV", err),
     }
 }

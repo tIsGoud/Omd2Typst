@@ -3,26 +3,27 @@ use std::hash::{Hash, Hasher};
 use std::io;
 use std::sync::Arc;
 
-use ecow::{eco_format, EcoString};
+use crate::diag::{StrResult, bail};
+use crate::foundations::{Bytes, Cast, Dict, Smart, Value, cast, dict};
+use ecow::{EcoString, eco_format};
 use image::codecs::gif::GifDecoder;
 use image::codecs::jpeg::JpegDecoder;
 use image::codecs::png::PngDecoder;
+use image::codecs::webp::WebPDecoder;
 use image::{
-    guess_format, DynamicImage, ImageBuffer, ImageDecoder, ImageResult, Limits, Pixel,
+    DynamicImage, ImageBuffer, ImageDecoder, ImageResult, Limits, Pixel, guess_format,
 };
-
-use crate::diag::{bail, StrResult};
-use crate::foundations::{cast, dict, Bytes, Cast, Dict, Smart, Value};
 
 /// A decoded raster image.
 #[derive(Clone, Hash)]
-pub struct RasterImage(Arc<Repr>);
+pub struct RasterImage(Arc<RasterImageInner>);
 
-/// The internal representation.
-struct Repr {
+/// The internal representation of a [`RasterImage`].
+struct RasterImageInner {
     data: Bytes,
     format: RasterFormat,
-    dynamic: image::DynamicImage,
+    dynamic: Arc<DynamicImage>,
+    exif_rotation: Option<u32>,
     icc: Option<Bytes>,
     dpi: Option<f64>,
 }
@@ -50,6 +51,8 @@ impl RasterImage {
         format: RasterFormat,
         icc: Smart<Bytes>,
     ) -> StrResult<RasterImage> {
+        let mut exif_rot = None;
+
         let (dynamic, icc, dpi) = match format {
             RasterFormat::Exchange(format) => {
                 fn decode<T: ImageDecoder>(
@@ -75,6 +78,7 @@ impl RasterImage {
                     ExchangeFormat::Jpg => decode(JpegDecoder::new(cursor), icc),
                     ExchangeFormat::Png => decode(PngDecoder::new(cursor), icc),
                     ExchangeFormat::Gif => decode(GifDecoder::new(cursor), icc),
+                    ExchangeFormat::Webp => decode(WebPDecoder::new(cursor), icc),
                 }
                 .map_err(format_image_error)?;
 
@@ -85,6 +89,7 @@ impl RasterImage {
                 // Apply rotation from EXIF metadata.
                 if let Some(rotation) = exif.as_ref().and_then(exif_rotation) {
                     apply_rotation(&mut dynamic, rotation);
+                    exif_rot = Some(rotation);
                 }
 
                 // Extract pixel density.
@@ -136,7 +141,14 @@ impl RasterImage {
             }
         };
 
-        Ok(Self(Arc::new(Repr { data, format, dynamic, icc, dpi })))
+        Ok(Self(Arc::new(RasterImageInner {
+            data,
+            format,
+            exif_rotation: exif_rot,
+            dynamic: Arc::new(dynamic),
+            icc,
+            dpi,
+        })))
     }
 
     /// The raw image data.
@@ -159,6 +171,14 @@ impl RasterImage {
         self.dynamic().height()
     }
 
+    /// The EXIF orientation value of the original image.
+    ///
+    /// The [`dynamic`](Self::dynamic) image already has this factored in. This
+    /// value is only relevant to consumers of the raw [`data`](Self::data).
+    pub fn exif_rotation(&self) -> Option<u32> {
+        self.0.exif_rotation
+    }
+
     /// The image's pixel density in pixels per inch, if known.
     ///
     /// This is guaranteed to be positive.
@@ -167,7 +187,7 @@ impl RasterImage {
     }
 
     /// Access the underlying dynamic image.
-    pub fn dynamic(&self) -> &image::DynamicImage {
+    pub fn dynamic(&self) -> &Arc<DynamicImage> {
         &self.0.dynamic
     }
 
@@ -177,7 +197,7 @@ impl RasterImage {
     }
 }
 
-impl Hash for Repr {
+impl Hash for RasterImageInner {
     fn hash<H: Hasher>(&self, state: &mut H) {
         // The image is fully defined by data, format, and ICC profile.
         self.data.hash(state);
@@ -227,6 +247,8 @@ pub enum ExchangeFormat {
     /// Raster format that is typically used for short animated clips. Typst can
     /// load GIFs, but they will become static.
     Gif,
+    /// Raster format that supports both lossy and lossless compression.
+    Webp,
 }
 
 impl ExchangeFormat {
@@ -242,6 +264,7 @@ impl From<ExchangeFormat> for image::ImageFormat {
             ExchangeFormat::Png => image::ImageFormat::Png,
             ExchangeFormat::Jpg => image::ImageFormat::Jpeg,
             ExchangeFormat::Gif => image::ImageFormat::Gif,
+            ExchangeFormat::Webp => image::ImageFormat::WebP,
         }
     }
 }
@@ -254,6 +277,7 @@ impl TryFrom<image::ImageFormat> for ExchangeFormat {
             image::ImageFormat::Png => ExchangeFormat::Png,
             image::ImageFormat::Jpeg => ExchangeFormat::Jpg,
             image::ImageFormat::Gif => ExchangeFormat::Gif,
+            image::ImageFormat::WebP => ExchangeFormat::Webp,
             _ => bail!("format not yet supported"),
         })
     }
@@ -263,11 +287,11 @@ impl TryFrom<image::ImageFormat> for ExchangeFormat {
 #[derive(Debug, Copy, Clone, Eq, PartialEq, Hash)]
 pub struct PixelFormat {
     /// The channel encoding.
-    encoding: PixelEncoding,
+    pub encoding: PixelEncoding,
     /// The pixel width.
-    width: u32,
+    pub width: u32,
     /// The pixel height.
-    height: u32,
+    pub height: u32,
 }
 
 /// Determines the channel encoding of raw pixel data.
@@ -397,22 +421,22 @@ fn jpeg_dpi(data: &[u8]) -> Option<f64> {
 /// Tries to extract the DPI from raw PNG data.
 fn png_dpi(mut data: &[u8]) -> Option<f64> {
     let mut decoder = png::StreamingDecoder::new();
-    let dims = loop {
-        let (consumed, event) = decoder.update(data, &mut Vec::new()).ok()?;
+    loop {
+        let (consumed, event) = decoder.update(data, None).ok()?;
         match event {
-            png::Decoded::PixelDimensions(dims) => break dims,
             // Bail as soon as there is anything data-like.
             png::Decoded::ChunkBegin(_, png::chunk::IDAT)
             | png::Decoded::ImageData
-            | png::Decoded::ImageEnd => return None,
+            | png::Decoded::ImageDataFlushed => break,
             _ => {}
         }
         data = data.get(consumed..)?;
         if consumed == 0 {
-            return None;
+            break;
         }
-    };
+    }
 
+    let dims = decoder.info().and_then(|i| i.pixel_dims)?;
     let dpu = dims.xppu.max(dims.yppu) as f64;
     match dims.unit {
         png::Unit::Meter => Some(dpu * 0.0254), // meter -> inches

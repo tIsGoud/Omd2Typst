@@ -270,7 +270,7 @@ Con el ajuste *Use file name as caption* (CLI: `--filename-captions`) una imagen
 
 ## PDF incrustados
 
-Un PDF se puede incrustar como una imagen: `![[archivo.pdf]]`. La exportación incluye sus páginas, de modo que un anexo conserva la numeración de páginas y los títulos de capítulo del documento. En el plugin de Obsidian el ajuste *PDF embeds* decide cómo aparecen las páginas: dentro de los márgenes, con encabezado y pie de página (predeterminado), o como páginas completas. Requiere Typst 0.14 o posterior. La herramienta de línea de comandos aún no incluye PDF y muestra un marcador de posición.
+Un PDF se puede incrustar como una imagen: `![[archivo.pdf]]`. La exportación incluye sus páginas, de modo que un anexo conserva la numeración de páginas y los títulos de capítulo del documento. En el plugin de Obsidian el ajuste *PDF embeds* decide cómo aparecen las páginas: dentro de los márgenes, con encabezado y pie de página (predeterminado), o como páginas completas. Requiere Typst 0.14 o posterior. La herramienta de línea de comandos también incluye los PDF de forma predeterminada; con `--pdf-embeds off` muestra un marcador de posición.
 
 | Sintaxis | Páginas incluidas |
 | --- | --- |
